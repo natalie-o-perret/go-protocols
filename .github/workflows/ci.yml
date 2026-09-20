@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   lint:
+    env:
+      GOWORK: "off"
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +30,8 @@ jobs:
           working-directory: ${{ matrix.module }}
 
   test:
+    env:
+      GOWORK: "off"
     strategy:
       fail-fast: false
       matrix:
