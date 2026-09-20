@@ -1,0 +1,15 @@
+name: ci - build + tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    uses: natalie-o-perret/.github/.github/workflows/reusable-build-test-go.yml@main
+    with:
+      go-versions: '["1.26.7"]'
+      go-version-latest: "1.26.7"
+      coverage-threshold: 35

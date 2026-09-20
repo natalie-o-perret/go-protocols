@@ -1,0 +1,18 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck      # unchecked error return values
+    - ineffassign   # assignments whose result is never used
+    - staticcheck   # SA / S1 style and correctness checks
+    - unused        # unexported identifiers that are never referenced
+    - govet         # go vet checks (shadow, printf, etc.)
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

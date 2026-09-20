@@ -1,0 +1,11 @@
+bin/
+*.test
+coverage.out
+*.sqlite
+*.db
+ircd.toml.local
+ircb.toml.local
+
+# JetBrains IDEs
+.idea/
+
