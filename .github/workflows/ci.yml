@@ -11,6 +11,7 @@ permissions:
   actions: read
   contents: read
   packages: read
+  pull-requests: read
   security-events: write
 
 jobs:
@@ -26,17 +27,6 @@ jobs:
       working-directory: ${{ matrix.module }}
       cache-dependency-path: ${{ matrix.module }}/go.sum
 
-  required:
-    name: ci
-    if: always()
-    needs: [lint, test, codeql]
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          test "${{ needs.lint.result }}" = success
-          test "${{ needs.test.result }}" = success
-          test "${{ needs.codeql.result }}" = success
-
   test:
     name: test (${{ matrix.module }})
     strategy:
@@ -45,17 +35,21 @@ jobs:
         include:
           - module: ftp
             go-versions: '["1.24","1.26.7"]'
+            coverage: 0
           - module: irc
             go-versions: '["1.26.7"]'
+            coverage: 35
           - module: sftp
             go-versions: '["1.26.0","1.26.7"]'
+            coverage: 0
           - module: torrent
             go-versions: '["1.26.3","1.26.7"]'
+            coverage: 80
     uses: natalie-o-perret/.github/.github/workflows/reusable-build-test-go.yml@main
     with:
       go-versions: ${{ matrix.go-versions }}
       go-version-latest: "1.26.7"
-      coverage-threshold: 0
+      coverage-threshold: ${{ matrix.coverage }}
       working-directory: ${{ matrix.module }}
       coverage-artifact-name: coverage-${{ matrix.module }}
       cache-dependency-path: ${{ matrix.module }}/go.sum
@@ -73,3 +67,41 @@ jobs:
       working-directory: ${{ matrix.module }}
       cache-dependency-path: ${{ matrix.module }}/go.sum
       category: /language:go/${{ matrix.module }}
+
+  lint-commits:
+    if: github.event_name == 'pull_request'
+    uses: natalie-o-perret/.github/.github/workflows/reusable-lint-commits-conventional.yml@main
+    permissions:
+      pull-requests: read
+
+  lint-json:
+    uses: natalie-o-perret/.github/.github/workflows/reusable-lint-files-json.yml@main
+
+  lint-markdown:
+    uses: natalie-o-perret/.github/.github/workflows/reusable-lint-files-md.yml@main
+
+  lint-yaml:
+    uses: natalie-o-perret/.github/.github/workflows/reusable-lint-files-yaml.yml@main
+
+  required:
+    name: ci
+    if: always()
+    needs: [lint, test, codeql, lint-commits, lint-json, lint-markdown, lint-yaml]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          LINT: ${{ needs.lint.result }}
+          TEST: ${{ needs.test.result }}
+          CODEQL: ${{ needs.codeql.result }}
+          COMMITS: ${{ needs.lint-commits.result }}
+          JSON: ${{ needs.lint-json.result }}
+          MARKDOWN: ${{ needs.lint-markdown.result }}
+          YAML: ${{ needs.lint-yaml.result }}
+        run: |
+          test "$LINT" = success
+          test "$TEST" = success
+          test "$CODEQL" = success
+          test "$COMMITS" = success || test "$COMMITS" = skipped
+          test "$JSON" = success
+          test "$MARKDOWN" = success
+          test "$YAML" = success
