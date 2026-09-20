@@ -8,7 +8,11 @@ name: ci
     branches: [main]
 
 permissions:
+  actions: read
   contents: read
+  packages: read
+  pull-requests: read
+  security-events: write
 
 jobs:
   lint:
@@ -47,3 +51,24 @@ jobs:
         working-directory: ${{ matrix.module }}
       - run: go test -race ./...
         working-directory: ${{ matrix.module }}
+
+  lint-commits:
+    if: github.event_name == 'pull_request'
+    uses: natalie-o-perret/.github/.github/workflows/reusable-lint-commits-conventional.yml@main
+    permissions:
+      pull-requests: read
+
+  lint-json:
+    uses: natalie-o-perret/.github/.github/workflows/reusable-lint-files-json.yml@main
+
+  lint-markdown:
+    uses: natalie-o-perret/.github/.github/workflows/reusable-lint-files-md.yml@main
+
+  lint-yaml:
+    uses: natalie-o-perret/.github/.github/workflows/reusable-lint-files-yaml.yml@main
+
+  codeql:
+    uses: natalie-o-perret/.github/.github/workflows/reusable-codeql.yml@main
+    with:
+      language: go
+      go-version-file: go.work
