@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/natalie-o-perret/go-sftp/sftp"
+	"github.com/natalie-o-perret/go-protocols/sftp/sftp"
 )
 
 // FileHandle is an opaque identifier issued by the backend to

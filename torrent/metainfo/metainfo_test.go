@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/natalie-o-perret/go-torrent/bencode"
-	"github.com/natalie-o-perret/go-torrent/metainfo"
+	"github.com/natalie-o-perret/go-protocols/torrent/bencode"
+	"github.com/natalie-o-perret/go-protocols/torrent/metainfo"
 )
 
 func buildTorrent(t *testing.T, announce string, infoDict map[string]any) []byte {

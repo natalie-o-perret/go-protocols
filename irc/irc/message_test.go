@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/natalie-o-perret/go-irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
 var parseTests = []struct {

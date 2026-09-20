@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/natalie-o-perret/go-irc/config"
-	"github.com/natalie-o-perret/go-irc/server"
+	"github.com/natalie-o-perret/go-protocols/irc/config"
+	"github.com/natalie-o-perret/go-protocols/irc/server"
 )
 
 // Build-time variables injected by goreleaser / go build -ldflags.

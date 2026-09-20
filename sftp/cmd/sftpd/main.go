@@ -19,8 +19,8 @@ import (
 	"net"
 	"os"
 
-	"github.com/natalie-o-perret/go-sftp/server"
-	"github.com/natalie-o-perret/go-sftp/server/backend/osfs"
+	"github.com/natalie-o-perret/go-protocols/sftp/server"
+	"github.com/natalie-o-perret/go-protocols/sftp/server/backend/osfs"
 	"golang.org/x/crypto/ssh"
 )
 

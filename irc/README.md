@@ -1,7 +1,7 @@
 # go-irc
 
-[![CI](https://github.com/natalie-o-perret/go-irc/actions/workflows/ci.yml/badge.svg)](https://github.com/natalie-o-perret/go-irc/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/natalie-o-perret/go-irc.svg)](https://pkg.go.dev/github.com/natalie-o-perret/go-irc)
+[![CI](https://github.com/natalie-o-perret/go-protocols/actions/workflows/ci.yml/badge.svg)](https://github.com/natalie-o-perret/go-protocols/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/natalie-o-perret/go-protocols/irc.svg)](https://pkg.go.dev/github.com/natalie-o-perret/go-protocols/irc)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Contributing](https://img.shields.io/badge/contributing-guide-blue)](CONTRIBUTING.md)
 
@@ -162,7 +162,7 @@ limit   = 500
 ### Parsing IRC messages
 
 ```go
-import "github.com/natalie-o-perret/go-irc/irc"
+import "github.com/natalie-o-perret/go-protocols/irc/irc"
 
 msg, err := irc.Parse(":nick!user@host PRIVMSG #go :Hello world")
 fmt.Println(msg.Command) // PRIVMSG
@@ -175,9 +175,9 @@ fmt.Println(irc.Format(msg)) // back to wire format
 
 ```go
 import (
-"github.com/natalie-o-perret/go-irc/client"
-"github.com/natalie-o-perret/go-irc/client/sasl"
-"github.com/natalie-o-perret/go-irc/irc"
+"github.com/natalie-o-perret/go-protocols/irc/client"
+"github.com/natalie-o-perret/go-protocols/irc/client/sasl"
+"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
 c := client.New(client.Config{
@@ -205,9 +205,9 @@ log.Fatal(err)
 
 ```go
 import (
-"github.com/natalie-o-perret/go-irc/client"
-"github.com/natalie-o-perret/go-irc/client/dcc"
-"github.com/natalie-o-perret/go-irc/irc"
+"github.com/natalie-o-perret/go-protocols/irc/client"
+"github.com/natalie-o-perret/go-protocols/irc/client/dcc"
+"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
 manager := dcc.NewManager()
@@ -237,7 +237,7 @@ fmt.Println("done:", sess.Filename)
 ### Embedding the server
 
 ```go
-import "github.com/natalie-o-perret/go-irc/server"
+import "github.com/natalie-o-perret/go-protocols/irc/server"
 
 srv := server.New(server.Config{
 Name:    "irc.local",

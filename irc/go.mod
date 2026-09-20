@@ -1,4 +1,4 @@
-module github.com/natalie-o-perret/go-irc
+module github.com/natalie-o-perret/go-protocols/irc
 
 go 1.26.7
 

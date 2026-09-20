@@ -5,8 +5,8 @@ import (
 	"crypto/sha1"
 	"testing"
 
-	"github.com/natalie-o-perret/go-torrent/metainfo"
-	"github.com/natalie-o-perret/go-torrent/piece"
+	"github.com/natalie-o-perret/go-protocols/torrent/metainfo"
+	"github.com/natalie-o-perret/go-protocols/torrent/piece"
 )
 
 func makeHash(data []byte) metainfo.Hash {

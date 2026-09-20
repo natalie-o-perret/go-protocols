@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/natalie-o-perret/go-irc/irc"
-	"github.com/natalie-o-perret/go-irc/server/mode"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/server/mode"
 )
 
 // dispatch routes a message to the appropriate handler.
@@ -1306,7 +1306,7 @@ func (srv *Server) handleAdmin(s *Session, _ *irc.Message) {
 
 func (srv *Server) handleInfo(s *Session, _ *irc.Message) {
 	s.SendNumeric(irc.RPL_INFO, "go-irc — a Go IRC server")
-	s.SendNumeric(irc.RPL_INFO, "https://github.com/natalie-o-perret/go-irc")
+	s.SendNumeric(irc.RPL_INFO, "https://github.com/natalie-o-perret/go-protocols/irc")
 	s.SendNumeric(irc.RPL_ENDOFINFO, "End of /INFO list")
 }
 

@@ -14,7 +14,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/natalie-o-perret/go-torrent/metainfo"
+	"github.com/natalie-o-perret/go-protocols/torrent/metainfo"
 )
 
 func main() {

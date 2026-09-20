@@ -8,8 +8,8 @@ import (
 	"crypto/tls"
 	"fmt"
 
-	"github.com/natalie-o-perret/go-ftp/client"
-	"github.com/natalie-o-perret/go-ftp/ftp"
+	"github.com/natalie-o-perret/go-protocols/ftp/client"
+	"github.com/natalie-o-perret/go-protocols/ftp/ftp"
 )
 
 // Config extends client.Config with FTPS-specific options.

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/natalie-o-perret/go-ftp/ftp"
+	"github.com/natalie-o-perret/go-protocols/ftp/ftp"
 )
 
 // DataChannel describes a passive-mode data channel returned by the

@@ -1,4 +1,4 @@
-module github.com/natalie-o-perret/go-ftp
+module github.com/natalie-o-perret/go-protocols/ftp
 
 go 1.24
 

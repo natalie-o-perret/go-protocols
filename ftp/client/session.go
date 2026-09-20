@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/natalie-o-perret/go-ftp/ftp"
+	"github.com/natalie-o-perret/go-protocols/ftp/ftp"
 )
 
 // Login authenticates with USER/PASS. If the server accepts a

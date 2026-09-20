@@ -3,8 +3,8 @@
 ## Setup
 
 ```sh
-git clone https://github.com/natalie-o-perret/go-torrent.git
-cd go-torrent
+git clone https://github.com/natalie-o-perret/go-protocols.git
+cd go-protocols/torrent
 ```
 
 Requires Go 1.24+ and [golangci-lint](https://golangci-lint.run/welcome/install/).

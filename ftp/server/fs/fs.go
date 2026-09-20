@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/natalie-o-perret/go-ftp/server/auth"
+	"github.com/natalie-o-perret/go-protocols/ftp/server/auth"
 )
 
 // Entry is a single directory entry returned by List.

@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/natalie-o-perret/go-irc/client/dcc"
+	"github.com/natalie-o-perret/go-protocols/irc/client/dcc"
 )
 
 func TestCTCPEncodeDecodeRoundtrip(t *testing.T) {

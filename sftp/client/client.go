@@ -15,7 +15,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/natalie-o-perret/go-sftp/sftp"
+	"github.com/natalie-o-perret/go-protocols/sftp/sftp"
 )
 
 // Channel is the minimum SSH channel interface the client needs.

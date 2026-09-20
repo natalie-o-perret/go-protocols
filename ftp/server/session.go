@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/natalie-o-perret/go-ftp/ftp"
-	"github.com/natalie-o-perret/go-ftp/server/auth"
-	"github.com/natalie-o-perret/go-ftp/server/fs"
+	"github.com/natalie-o-perret/go-protocols/ftp/ftp"
+	"github.com/natalie-o-perret/go-protocols/ftp/server/auth"
+	"github.com/natalie-o-perret/go-protocols/ftp/server/fs"
 )
 
 // session is one FTP control connection and its state.

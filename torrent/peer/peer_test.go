@@ -6,8 +6,8 @@ import (
 	"net"
 	"testing"
 
-	"github.com/natalie-o-perret/go-torrent/metainfo"
-	"github.com/natalie-o-perret/go-torrent/peer"
+	"github.com/natalie-o-perret/go-protocols/torrent/metainfo"
+	"github.com/natalie-o-perret/go-protocols/torrent/peer"
 )
 
 func TestHandshake(t *testing.T) {

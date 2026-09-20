@@ -27,9 +27,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/natalie-o-perret/go-irc/bouncer/history"
-	goclient "github.com/natalie-o-perret/go-irc/client"
-	"github.com/natalie-o-perret/go-irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/bouncer/history"
+	goclient "github.com/natalie-o-perret/go-protocols/irc/client"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
 // ---------------------------------------------------------------------------

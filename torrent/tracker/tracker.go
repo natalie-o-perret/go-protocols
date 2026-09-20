@@ -16,8 +16,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/natalie-o-perret/go-torrent/bencode"
-	"github.com/natalie-o-perret/go-torrent/metainfo"
+	"github.com/natalie-o-perret/go-protocols/torrent/bencode"
+	"github.com/natalie-o-perret/go-protocols/torrent/metainfo"
 )
 
 // Event is the tracker event parameter defined in BEP 3.

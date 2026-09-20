@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/natalie-o-perret/go-irc/irc"
-	"github.com/natalie-o-perret/go-irc/server/mode"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/server/mode"
 )
 
 // ---------------------------------------------------------------------------

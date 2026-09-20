@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/natalie-o-perret/go-torrent/bencode"
+	"github.com/natalie-o-perret/go-protocols/torrent/bencode"
 )
 
 func TestJoinPath(t *testing.T) {

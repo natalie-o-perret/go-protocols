@@ -1,6 +1,6 @@
 # go-sftp
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/natalie-o-perret/go-sftp.svg)](https://pkg.go.dev/github.com/natalie-o-perret/go-sftp)
+[![Go Reference](https://pkg.go.dev/badge/github.com/natalie-o-perret/go-protocols/sftp.svg)](https://pkg.go.dev/github.com/natalie-o-perret/go-protocols/sftp)
 
 A focused, embeddable SFTP library and server in Go.
 
@@ -26,7 +26,7 @@ requested as the `sftp` subsystem:
 
 ```go
 import (
-    "github.com/natalie-o-perret/go-sftp/client"
+    "github.com/natalie-o-perret/go-protocols/sftp/client"
     "golang.org/x/crypto/ssh"
 )
 
@@ -51,8 +51,8 @@ for _, e := range entries {
 
 ```go
 import (
-    "github.com/natalie-o-perret/go-sftp/server"
-    "github.com/natalie-o-perret/go-sftp/server/backend/osfs"
+    "github.com/natalie-o-perret/go-protocols/sftp/server"
+    "github.com/natalie-o-perret/go-protocols/sftp/server/backend/osfs"
 )
 
 srv := server.New(osfs.New("/srv/files"))

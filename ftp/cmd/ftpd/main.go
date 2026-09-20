@@ -15,10 +15,10 @@ import (
 	"log"
 	"os"
 
-	"github.com/natalie-o-perret/go-ftp/config"
-	"github.com/natalie-o-perret/go-ftp/server"
-	"github.com/natalie-o-perret/go-ftp/server/auth"
-	"github.com/natalie-o-perret/go-ftp/server/fs"
+	"github.com/natalie-o-perret/go-protocols/ftp/config"
+	"github.com/natalie-o-perret/go-protocols/ftp/server"
+	"github.com/natalie-o-perret/go-protocols/ftp/server/auth"
+	"github.com/natalie-o-perret/go-protocols/ftp/server/fs"
 )
 
 func main() {

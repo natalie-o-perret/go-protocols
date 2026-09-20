@@ -3,7 +3,7 @@ package sasl_test
 import (
 	"testing"
 
-	"github.com/natalie-o-perret/go-irc/client/sasl"
+	"github.com/natalie-o-perret/go-protocols/irc/client/sasl"
 )
 
 func TestPlain(t *testing.T) {

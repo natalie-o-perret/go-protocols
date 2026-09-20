@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/natalie-o-perret/go-ftp/server/auth"
-	"github.com/natalie-o-perret/go-ftp/server/fs"
+	"github.com/natalie-o-perret/go-protocols/ftp/server/auth"
+	"github.com/natalie-o-perret/go-protocols/ftp/server/fs"
 )
 
 // Config is the server configuration.

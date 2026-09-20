@@ -1,4 +1,4 @@
-module github.com/natalie-o-perret/go-sftp
+module github.com/natalie-o-perret/go-protocols/sftp
 
 go 1.24
 

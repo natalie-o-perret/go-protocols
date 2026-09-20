@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/natalie-o-perret/go-irc/client/sasl"
-	"github.com/natalie-o-perret/go-irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/client/sasl"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
 // HandlerFunc is a function that handles an IRC message.

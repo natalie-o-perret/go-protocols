@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/natalie-o-perret/go-ftp/ftp"
-	"github.com/natalie-o-perret/go-ftp/server/auth"
-	"github.com/natalie-o-perret/go-ftp/server/fs"
+	"github.com/natalie-o-perret/go-protocols/ftp/ftp"
+	"github.com/natalie-o-perret/go-protocols/ftp/server/auth"
+	"github.com/natalie-o-perret/go-protocols/ftp/server/fs"
 )
 
 type ftpClient struct {

@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"os"
 
-	bouncerpkg "github.com/natalie-o-perret/go-irc/bouncer"
-	"github.com/natalie-o-perret/go-irc/config"
+	bouncerpkg "github.com/natalie-o-perret/go-protocols/irc/bouncer"
+	"github.com/natalie-o-perret/go-protocols/irc/config"
 )
 
 // Build-time variables injected by goreleaser / go build -ldflags.

@@ -3,7 +3,7 @@ package ringbuf_test
 import (
 	"testing"
 
-	"github.com/natalie-o-perret/go-irc/internal/ringbuf"
+	"github.com/natalie-o-perret/go-protocols/irc/internal/ringbuf"
 )
 
 func TestPushAndSlice(t *testing.T) {

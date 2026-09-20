@@ -3,7 +3,7 @@ package bitfield_test
 import (
 	"testing"
 
-	"github.com/natalie-o-perret/go-torrent/bitfield"
+	"github.com/natalie-o-perret/go-protocols/torrent/bitfield"
 )
 
 func TestNew(t *testing.T) {

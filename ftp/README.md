@@ -1,6 +1,6 @@
 # go-ftp
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/natalie-o-perret/go-ftp.svg)](https://pkg.go.dev/github.com/natalie-o-perret/go-ftp)
+[![Go Reference](https://pkg.go.dev/badge/github.com/natalie-o-perret/go-protocols/ftp.svg)](https://pkg.go.dev/github.com/natalie-o-perret/go-protocols/ftp)
 
 A focused, embeddable FTP + FTPS library and server in pure Go.
 
@@ -27,8 +27,8 @@ A focused, embeddable FTP + FTPS library and server in pure Go.
 
 ```go
 import (
-    "github.com/natalie-o-perret/go-ftp/client"
-    "github.com/natalie-o-perret/go-ftp/client/ftps"
+    "github.com/natalie-o-perret/go-protocols/ftp/client"
+    "github.com/natalie-o-perret/go-protocols/ftp/client/ftps"
 )
 
 c, err := client.New(client.Config{
@@ -64,9 +64,9 @@ c, err := ftps.Connect(ftps.Config{
 
 ```go
 import (
-    "github.com/natalie-o-perret/go-ftp/server"
-    "github.com/natalie-o-perret/go-ftp/server/auth"
-    "github.com/natalie-o-perret/go-ftp/server/fs"
+    "github.com/natalie-o-perret/go-protocols/ftp/server"
+    "github.com/natalie-o-perret/go-protocols/ftp/server/auth"
+    "github.com/natalie-o-perret/go-protocols/ftp/server/fs"
 )
 
 srv, _ := server.New(server.Config{

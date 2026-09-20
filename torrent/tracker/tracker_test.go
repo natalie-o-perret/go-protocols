@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/natalie-o-perret/go-torrent/bencode"
-	"github.com/natalie-o-perret/go-torrent/tracker"
+	"github.com/natalie-o-perret/go-protocols/torrent/bencode"
+	"github.com/natalie-o-perret/go-protocols/torrent/tracker"
 )
 
 func buildCompactPeers(peers []tracker.Peer) string {

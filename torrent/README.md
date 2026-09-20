@@ -1,7 +1,7 @@
 # go-torrent
 
-[![CI](https://github.com/natalie-o-perret/go-torrent/actions/workflows/ci.yml/badge.svg)](https://github.com/natalie-o-perret/go-torrent/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/natalie-o-perret/go-torrent.svg)](https://pkg.go.dev/github.com/natalie-o-perret/go-torrent)
+[![CI](https://github.com/natalie-o-perret/go-protocols/actions/workflows/ci.yml/badge.svg)](https://github.com/natalie-o-perret/go-protocols/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/natalie-o-perret/go-protocols/torrent.svg)](https://pkg.go.dev/github.com/natalie-o-perret/go-protocols/torrent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -13,14 +13,14 @@ A focused, composable BitTorrent protocol library for Go 1.24+.
 
 ## Packages
 
-| Package    | Import path                                       | Description                                     |
-| ---------- | ------------------------------------------------- | ----------------------------------------------- |
-| `bencode`  | `github.com/natalie-o-perret/go-torrent/bencode`  | Bencoding encoder and decoder                   |
-| `bitfield` | `github.com/natalie-o-perret/go-torrent/bitfield` | Compact bitfield for piece tracking             |
-| `metainfo` | `github.com/natalie-o-perret/go-torrent/metainfo` | `.torrent` file parser and InfoHash computation |
-| `tracker`  | `github.com/natalie-o-perret/go-torrent/tracker`  | HTTP tracker announce client                    |
-| `peer`     | `github.com/natalie-o-perret/go-torrent/peer`     | Peer wire protocol (handshake, messages)        |
-| `piece`    | `github.com/natalie-o-perret/go-torrent/piece`    | Per-piece download state and verification       |
+| Package | Import path | Description |
+| --- | --- | --- |
+| `bencode` | `github.com/natalie-o-perret/go-protocols/torrent/bencode` | Bencoding encoder and decoder |
+| `bitfield` | `github.com/natalie-o-perret/go-protocols/torrent/bitfield` | Compact bitfield for piece tracking |
+| `metainfo` | `github.com/natalie-o-perret/go-protocols/torrent/metainfo` | `.torrent` file parser and InfoHash computation |
+| `tracker` | `github.com/natalie-o-perret/go-protocols/torrent/tracker` | HTTP tracker announce client |
+| `peer` | `github.com/natalie-o-perret/go-protocols/torrent/peer` | Peer wire protocol (handshake, messages) |
+| `piece` | `github.com/natalie-o-perret/go-protocols/torrent/piece` | Per-piece download state and verification |
 
 ## Quick start
 
@@ -28,8 +28,8 @@ A focused, composable BitTorrent protocol library for Go 1.24+.
 import (
     "os"
 
-    "github.com/natalie-o-perret/go-torrent/metainfo"
-    "github.com/natalie-o-perret/go-torrent/tracker"
+    "github.com/natalie-o-perret/go-protocols/torrent/metainfo"
+    "github.com/natalie-o-perret/go-protocols/torrent/tracker"
 )
 
 // Parse a .torrent file
@@ -55,7 +55,7 @@ peers, err := tracker.Announce(m.Trackers()[0], tracker.AnnounceRequest{
 ## CLI
 
 ```sh
-go install github.com/natalie-o-perret/go-torrent/cmd/gotorrent@latest
+go install github.com/natalie-o-perret/go-protocols/torrent/cmd/gotorrent@latest
 
 gotorrent info ubuntu.torrent
 ```

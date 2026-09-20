@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/natalie-o-perret/go-sftp/server"
-	"github.com/natalie-o-perret/go-sftp/sftp"
+	"github.com/natalie-o-perret/go-protocols/sftp/server"
+	"github.com/natalie-o-perret/go-protocols/sftp/sftp"
 )
 
 // FS is an OS-backed SFTP backend.

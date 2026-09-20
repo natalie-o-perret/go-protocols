@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/natalie-o-perret/go-irc/bouncer/history"
-	"github.com/natalie-o-perret/go-irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/bouncer/history"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
 type recordingConn struct{ bytes.Buffer }

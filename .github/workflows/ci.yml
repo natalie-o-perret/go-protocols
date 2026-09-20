@@ -1,0 +1,45 @@
+---
+name: ci
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [ftp, irc, sftp, torrent]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          working-directory: ${{ matrix.module }}
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [ftp, irc, sftp, torrent]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - run: go vet ./...
+        working-directory: ${{ matrix.module }}
+      - run: go test -race ./...
+        working-directory: ${{ matrix.module }}

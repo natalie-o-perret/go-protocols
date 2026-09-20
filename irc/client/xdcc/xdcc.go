@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/natalie-o-perret/go-irc/client/dcc"
+	"github.com/natalie-o-perret/go-protocols/irc/client/dcc"
 )
 
 // Pack represents a single XDCC pack.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/natalie-o-perret/go-irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
 // Set stores the current mode state for a channel or user.

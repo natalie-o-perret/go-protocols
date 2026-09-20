@@ -16,7 +16,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/natalie-o-perret/go-torrent/bencode"
+	"github.com/natalie-o-perret/go-protocols/torrent/bencode"
 )
 
 // Hash is a 20-byte SHA-1 digest.

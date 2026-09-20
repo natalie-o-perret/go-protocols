@@ -10,7 +10,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 
-	"github.com/natalie-o-perret/go-torrent/metainfo"
+	"github.com/natalie-o-perret/go-protocols/torrent/metainfo"
 )
 
 // BlockSize is the standard block request size (16 KiB) used in the peer wire

@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/natalie-o-perret/go-irc/internal/ringbuf"
-	"github.com/natalie-o-perret/go-irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/internal/ringbuf"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
 // Entry is a stored IRC message with a server-side timestamp.

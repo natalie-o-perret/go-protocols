@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/natalie-o-perret/go-sftp/client"
-	"github.com/natalie-o-perret/go-sftp/server"
-	"github.com/natalie-o-perret/go-sftp/server/backend/osfs"
-	"github.com/natalie-o-perret/go-sftp/sftp"
+	"github.com/natalie-o-perret/go-protocols/sftp/client"
+	"github.com/natalie-o-perret/go-protocols/sftp/server"
+	"github.com/natalie-o-perret/go-protocols/sftp/server/backend/osfs"
+	"github.com/natalie-o-perret/go-protocols/sftp/sftp"
 )
 
 // pipe returns two io.ReadWriteClosers connected to each other. The

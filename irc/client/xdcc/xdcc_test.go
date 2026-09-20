@@ -3,7 +3,7 @@ package xdcc_test
 import (
 	"testing"
 
-	"github.com/natalie-o-perret/go-irc/client/xdcc"
+	"github.com/natalie-o-perret/go-protocols/irc/client/xdcc"
 )
 
 func TestParseListNoticeIroffer(t *testing.T) {

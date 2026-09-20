@@ -12,10 +12,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/natalie-o-perret/go-irc/client"
-	"github.com/natalie-o-perret/go-irc/client/dcc"
-	"github.com/natalie-o-perret/go-irc/client/xdcc"
-	"github.com/natalie-o-perret/go-irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/client"
+	"github.com/natalie-o-perret/go-protocols/irc/client/dcc"
+	"github.com/natalie-o-perret/go-protocols/irc/client/xdcc"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
 // Build-time variables injected by goreleaser / go build -ldflags.

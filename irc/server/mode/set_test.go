@@ -3,8 +3,8 @@ package mode_test
 import (
 	"testing"
 
-	"github.com/natalie-o-perret/go-irc/irc"
-	"github.com/natalie-o-perret/go-irc/server/mode"
+	"github.com/natalie-o-perret/go-protocols/irc/irc"
+	"github.com/natalie-o-perret/go-protocols/irc/server/mode"
 )
 
 func TestSetApplyFlags(t *testing.T) {
