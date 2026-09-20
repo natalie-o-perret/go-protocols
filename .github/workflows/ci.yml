@@ -8,42 +8,68 @@ name: ci
     branches: [main]
 
 permissions:
+  actions: read
   contents: read
+  packages: read
+  security-events: write
 
 jobs:
   lint:
-    env:
-      GOWORK: "off"
+    name: lint (${{ matrix.module }})
     strategy:
       fail-fast: false
       matrix:
         module: [ftp, irc, sftp, torrent]
+    uses: natalie-o-perret/.github/.github/workflows/reusable-lint-files-go.yml@main
+    with:
+      go-version-file: ${{ matrix.module }}/go.mod
+      working-directory: ${{ matrix.module }}
+      cache-dependency-path: ${{ matrix.module }}/go.sum
+
+  required:
+    name: ci
+    if: always()
+    needs: [lint, test, codeql]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: ${{ matrix.module }}/go.mod
-          cache-dependency-path: ${{ matrix.module }}/go.sum
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          working-directory: ${{ matrix.module }}
+      - run: |
+          test "${{ needs.lint.result }}" = success
+          test "${{ needs.test.result }}" = success
+          test "${{ needs.codeql.result }}" = success
 
   test:
-    env:
-      GOWORK: "off"
+    name: test (${{ matrix.module }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: ftp
+            go-versions: '["1.24","1.26.7"]'
+          - module: irc
+            go-versions: '["1.26.7"]'
+          - module: sftp
+            go-versions: '["1.26.0","1.26.7"]'
+          - module: torrent
+            go-versions: '["1.26.3","1.26.7"]'
+    uses: natalie-o-perret/.github/.github/workflows/reusable-build-test-go.yml@main
+    with:
+      go-versions: ${{ matrix.go-versions }}
+      go-version-latest: "1.26.7"
+      coverage-threshold: 0
+      working-directory: ${{ matrix.module }}
+      coverage-artifact-name: coverage-${{ matrix.module }}
+      cache-dependency-path: ${{ matrix.module }}/go.sum
+
+  codeql:
+    name: codeql (${{ matrix.module }})
     strategy:
       fail-fast: false
       matrix:
         module: [ftp, irc, sftp, torrent]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: ${{ matrix.module }}/go.mod
-          cache-dependency-path: ${{ matrix.module }}/go.sum
-      - run: go vet ./...
-        working-directory: ${{ matrix.module }}
-      - run: go test -race ./...
-        working-directory: ${{ matrix.module }}
+    uses: natalie-o-perret/.github/.github/workflows/reusable-codeql.yml@main
+    with:
+      language: go
+      go-version-file: ${{ matrix.module }}/go.mod
+      working-directory: ${{ matrix.module }}
+      cache-dependency-path: ${{ matrix.module }}/go.sum
+      category: /language:go/${{ matrix.module }}
