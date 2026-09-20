@@ -25,7 +25,6 @@ jobs:
       go-version-file: ${{ matrix.module }}/go.mod
       working-directory: ${{ matrix.module }}
       cache-dependency-path: ${{ matrix.module }}/go.sum
-      category: /language:go/${{ matrix.module }}
 
   required:
     name: ci
@@ -73,3 +72,4 @@ jobs:
       go-version-file: ${{ matrix.module }}/go.mod
       working-directory: ${{ matrix.module }}
       cache-dependency-path: ${{ matrix.module }}/go.sum
+      category: /language:go/${{ matrix.module }}
