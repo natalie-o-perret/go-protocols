@@ -1,0 +1,11 @@
+name: cd - release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    uses: natalie-o-perret/.github/.github/workflows/reusable-release.yml@main
+    permissions:
+      contents: write
