@@ -1,0 +1,15 @@
+[server]
+name = "go-ftp"
+listen = ":21"
+banner = "Welcome to go-ftp"
+welcome_message = "Hello!"
+passive_port_start = 50000
+passive_port_end   = 50100
+
+# root path of the served filesystem
+root = "."
+
+# static users; omit for anonymous-only
+# [[users]]
+# name = "alice"
+# password = "hunter2"
