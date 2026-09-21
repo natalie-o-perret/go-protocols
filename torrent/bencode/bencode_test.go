@@ -18,6 +18,9 @@ func TestDecodeInt(t *testing.T) {
 		{"i-1e", -1, false},
 		{"i1000000e", 1_000_000, false},
 		{"i-0e", 0, true},
+		{"i01e", 0, true},
+		{"i-01e", 0, true},
+		{"i+1e", 0, true},
 		{"ixe", 0, true},
 		{"i9999999999999999999e", 0, true},
 	}
@@ -54,6 +57,8 @@ func TestDecodeString(t *testing.T) {
 		{"0:", "", false},
 		{"3:abc", "abc", false},
 		{"5:ab", "", true},
+		{"01:a", "", true},
+		{"999999999:a", "", true},
 	}
 	for _, tc := range tests {
 		got, err := bencode.Decode(strings.NewReader(tc.in))
@@ -143,6 +148,12 @@ func TestDecodeEmptyDict(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsUnsortedDictionary(t *testing.T) {
+	if _, err := bencode.Decode(strings.NewReader("d3:fooi1e3:bari2ee")); err == nil {
+		t.Fatal("Decode accepted unsorted dictionary keys")
+	}
+}
+
 func TestDecodeNestedList(t *testing.T) {
 	got, err := bencode.Decode(strings.NewReader("ll4:spamee"))
 	if err != nil {
@@ -161,6 +172,13 @@ func TestDecodeNestedList(t *testing.T) {
 	}
 	if inner[0] != "spam" {
 		t.Errorf("inner[0] = %v, want spam", inner[0])
+	}
+}
+
+func TestDecodeRejectsDeepNesting(t *testing.T) {
+	input := strings.Repeat("l", 66) + "0:" + strings.Repeat("e", 66)
+	if _, err := bencode.Decode(strings.NewReader(input)); err == nil {
+		t.Fatal("Decode accepted excessive nesting")
 	}
 }
 

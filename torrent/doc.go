@@ -3,6 +3,9 @@
 // It provides focused, composable packages implementing the core BitTorrent
 // specification (BEP 3) and related extensions.
 //
+// [Download] coordinates HTTP tracker discovery, peer-wire transfers, pipelined
+// block requests, piece verification, and writes to a contiguous io.WriterAt.
+//
 // # Packages
 //
 // bencode: Encoder and decoder for the bencoding format used in .torrent files

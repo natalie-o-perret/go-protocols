@@ -20,10 +20,10 @@ const BlockSize = 1 << 14 // 16384 bytes
 // State tracks the download progress of a single piece.
 type State struct {
 	data       []byte
+	blocks     []uint8
 	index      int
 	length     int
 	downloaded int
-	requested  int
 	hash       metainfo.Hash
 }
 
@@ -35,6 +35,7 @@ func New(index int, hash metainfo.Hash, length int) *State {
 		hash:   hash,
 		length: length,
 		data:   make([]byte, length),
+		blocks: make([]uint8, (length+BlockSize-1)/BlockSize),
 	}
 }
 
@@ -50,30 +51,48 @@ func (s *State) Complete() bool { return s.downloaded >= s.length }
 // NextRequest returns the offset and block length of the next block to
 // request, and whether there are still blocks left to request.
 //
-// Calling NextRequest advances the internal request cursor. Pairs with
-// [State.Store] to fill the piece buffer.
+// Calling NextRequest marks the block as requested. Pairs with [State.Store]
+// to fill the piece buffer and [State.ResetRequests] to retry dropped requests.
 func (s *State) NextRequest() (begin, blockLen int, ok bool) {
-	if s.requested >= s.length {
-		return 0, 0, false
+	for i, status := range s.blocks {
+		if status != 0 {
+			continue
+		}
+		begin = i * BlockSize
+		blockLen = min(BlockSize, s.length-begin)
+		s.blocks[i] = 1
+		return begin, blockLen, true
 	}
-	begin = s.requested
-	blockLen = BlockSize
-	if begin+blockLen > s.length {
-		blockLen = s.length - begin
-	}
-	s.requested += blockLen
-	return begin, blockLen, true
+	return 0, 0, false
 }
 
-// Store writes data into the piece buffer at the given byte offset.
-// Returns an error if the write would overflow the piece.
+// ResetRequests makes requested but unreceived blocks available for retry.
+// Peers discard outstanding requests when they choke a client.
+func (s *State) ResetRequests() {
+	for i, status := range s.blocks {
+		if status == 1 {
+			s.blocks[i] = 0
+		}
+	}
+}
+
+// Store writes one complete, block-aligned response into the piece buffer.
 func (s *State) Store(begin int, data []byte) error {
-	if begin+len(data) > s.length {
-		return fmt.Errorf("piece %d: block at offset %d len %d overflows piece len %d",
-			s.index, begin, len(data), s.length)
+	if begin < 0 || begin >= s.length || begin%BlockSize != 0 {
+		return fmt.Errorf("piece %d: invalid block offset %d", s.index, begin)
+	}
+	block := begin / BlockSize
+	expected := min(BlockSize, s.length-begin)
+	if len(data) != expected {
+		return fmt.Errorf("piece %d: block at offset %d has len %d, want %d",
+			s.index, begin, len(data), expected)
+	}
+	if s.blocks[block] == 2 {
+		return nil
 	}
 	copy(s.data[begin:], data)
 	s.downloaded += len(data)
+	s.blocks[block] = 2
 	return nil
 }
 

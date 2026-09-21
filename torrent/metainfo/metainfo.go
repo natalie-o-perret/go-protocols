@@ -14,10 +14,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	"github.com/natalie-o-perret/go-protocols/torrent/bencode"
 )
+
+const maxMetaInfoSize = 64 << 20
 
 // Hash is a 20-byte SHA-1 digest.
 type Hash [20]byte
@@ -44,7 +47,7 @@ type Info struct {
 
 // TotalLength returns the total download size in bytes.
 func (info *Info) TotalLength() int64 {
-	if info.Length > 0 {
+	if len(info.Files) == 0 {
 		return info.Length
 	}
 	var total int64
@@ -52,6 +55,43 @@ func (info *Info) TotalLength() int64 {
 		total += f.Length
 	}
 	return total
+}
+
+// Validate checks the lengths and piece hashes in an info dictionary.
+func (info *Info) Validate() error {
+	if info.PieceLength <= 0 {
+		return fmt.Errorf("metainfo: invalid piece length %d", info.PieceLength)
+	}
+	if info.Length < 0 {
+		return fmt.Errorf("metainfo: invalid file length %d", info.Length)
+	}
+	if len(info.Files) > 0 && info.Length != 0 {
+		return fmt.Errorf("metainfo: info contains both length and files")
+	}
+
+	var total int64
+	if len(info.Files) == 0 {
+		total = info.Length
+	} else {
+		for _, file := range info.Files {
+			if file.Length < 0 || file.Length > math.MaxInt64-total {
+				return fmt.Errorf("metainfo: invalid file length %d", file.Length)
+			}
+			if len(file.Path) == 0 {
+				return fmt.Errorf("metainfo: file path is empty")
+			}
+			total += file.Length
+		}
+	}
+
+	expected := int64(0)
+	if total > 0 {
+		expected = (total-1)/info.PieceLength + 1
+	}
+	if int64(len(info.Pieces)) != expected {
+		return fmt.Errorf("metainfo: %d piece hashes, want %d for %d bytes", len(info.Pieces), expected, total)
+	}
+	return nil
 }
 
 // PieceCount returns the number of pieces.
@@ -102,9 +142,12 @@ func (m *MetaInfo) Trackers() []string {
 // lexicographically sorted keys (required by BEP 3) and taking the SHA-1 of
 // the result.
 func Decode(r io.Reader) (*MetaInfo, error) {
-	data, err := io.ReadAll(r)
+	data, err := io.ReadAll(io.LimitReader(r, maxMetaInfoSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("metainfo: read: %w", err)
+	}
+	if len(data) > maxMetaInfoSize {
+		return nil, fmt.Errorf("metainfo: file exceeds %d bytes", maxMetaInfoSize)
 	}
 	raw, err := bencode.Decode(bytes.NewReader(data))
 	if err != nil {
@@ -178,18 +221,28 @@ func Decode(r io.Reader) (*MetaInfo, error) {
 func parseInfo(d map[string]any) (*Info, error) {
 	info := &Info{}
 
-	if v, ok := d["name"]; ok {
-		info.Name, _ = v.(string)
+	name, ok := d["name"].(string)
+	if !ok || name == "" {
+		return nil, fmt.Errorf("metainfo: missing or invalid 'name' key")
 	}
-	if v, ok := d["piece length"]; ok {
-		if n, ok := v.(int64); ok {
-			info.PieceLength = n
-		}
+	info.Name = name
+	pieceLength, ok := d["piece length"].(int64)
+	if !ok {
+		return nil, fmt.Errorf("metainfo: missing or invalid 'piece length' key")
 	}
-	if v, ok := d["length"]; ok {
-		if n, ok := v.(int64); ok {
-			info.Length = n
+	info.PieceLength = pieceLength
+
+	lengthRaw, hasLength := d["length"]
+	filesRaw, hasFiles := d["files"]
+	if hasLength == hasFiles {
+		return nil, fmt.Errorf("metainfo: info must contain exactly one of 'length' or 'files'")
+	}
+	if hasLength {
+		length, ok := lengthRaw.(int64)
+		if !ok {
+			return nil, fmt.Errorf("metainfo: 'length' is not an integer")
 		}
+		info.Length = length
 	}
 
 	piecesRaw, ok := d["pieces"]
@@ -208,42 +261,49 @@ func parseInfo(d map[string]any) (*Info, error) {
 		copy(info.Pieces[i][:], piecesStr[i*20:(i+1)*20])
 	}
 
-	if v, ok := d["files"]; ok {
-		fileList, ok := v.([]any)
+	if hasFiles {
+		fileList, ok := filesRaw.([]any)
 		if !ok {
 			return nil, fmt.Errorf("metainfo: 'files' is not a list")
+		}
+		if len(fileList) == 0 {
+			return nil, fmt.Errorf("metainfo: 'files' is empty")
 		}
 		for _, f := range fileList {
 			fd, ok := f.(map[string]any)
 			if !ok {
 				return nil, fmt.Errorf("metainfo: file entry is not a dictionary")
 			}
-			fi := parseFileInfo(fd)
-			if fi == nil {
-				continue
+			fi, err := parseFileInfo(fd)
+			if err != nil {
+				return nil, err
 			}
 			info.Files = append(info.Files, *fi)
 		}
 	}
 
+	if err := info.Validate(); err != nil {
+		return nil, err
+	}
 	return info, nil
 }
 
-func parseFileInfo(d map[string]any) *FileInfo {
-	fi := &FileInfo{}
-	if v, ok := d["length"]; ok {
-		if n, ok := v.(int64); ok {
-			fi.Length = n
-		}
+func parseFileInfo(d map[string]any) (*FileInfo, error) {
+	length, ok := d["length"].(int64)
+	if !ok {
+		return nil, fmt.Errorf("metainfo: file 'length' is not an integer")
 	}
-	if v, ok := d["path"]; ok {
-		if pathList, ok := v.([]any); ok {
-			for _, p := range pathList {
-				if s, ok := p.(string); ok {
-					fi.Path = append(fi.Path, s)
-				}
-			}
-		}
+	pathList, ok := d["path"].([]any)
+	if !ok || len(pathList) == 0 {
+		return nil, fmt.Errorf("metainfo: file 'path' is not a non-empty list")
 	}
-	return fi
+	fi := &FileInfo{Length: length}
+	for _, part := range pathList {
+		value, ok := part.(string)
+		if !ok || value == "" {
+			return nil, fmt.Errorf("metainfo: file path component is not a non-empty string")
+		}
+		fi.Path = append(fi.Path, value)
+	}
+	return fi, nil
 }

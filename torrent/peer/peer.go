@@ -24,6 +24,8 @@ import (
 const (
 	protocolStr    = "BitTorrent protocol"
 	protocolStrLen = 19
+	// MaxMessageSize bounds allocations made for untrusted peer messages.
+	MaxMessageSize = 4 << 20
 	// handshakeLen is the total byte length of a BEP 3 handshake:
 	// 1 (pstrlen) + 19 (pstr) + 8 (reserved) + 20 (info_hash) + 20 (peer_id)
 	handshakeLen     = 68
@@ -71,7 +73,7 @@ func Handshake(conn net.Conn, infoHash metainfo.Hash, peerID [20]byte) ([20]byte
 	}
 	defer func() { _ = conn.SetDeadline(time.Time{}) }()
 
-	// Send and receive concurrently — net.Pipe and similar connections have no
+	// Send and receive concurrently. net.Pipe and similar connections have no
 	// internal buffer, so send-then-receive would deadlock when both sides
 	// initiate the handshake at the same time.
 	sendErrCh := make(chan error, 1)
@@ -129,6 +131,9 @@ func ReadMessage(r io.Reader) (*Message, error) {
 	if length == 0 {
 		return nil, nil // keepalive
 	}
+	if length > MaxMessageSize {
+		return nil, fmt.Errorf("peer: message length %d exceeds limit %d", length, MaxMessageSize)
+	}
 	raw := make([]byte, length)
 	if _, err := io.ReadFull(r, raw); err != nil {
 		return nil, fmt.Errorf("peer: read message payload: %w", err)
@@ -138,6 +143,12 @@ func ReadMessage(r io.Reader) (*Message, error) {
 
 // WriteMessage writes a length-prefixed message to w.
 func WriteMessage(w io.Writer, msg *Message) error {
+	if msg == nil {
+		return fmt.Errorf("peer: cannot write nil message")
+	}
+	if len(msg.Payload)+1 > MaxMessageSize {
+		return fmt.Errorf("peer: message length %d exceeds limit %d", len(msg.Payload)+1, MaxMessageSize)
+	}
 	length := uint32(1 + len(msg.Payload))
 	if err := binary.Write(w, binary.BigEndian, length); err != nil {
 		return fmt.Errorf("peer: write message length: %w", err)

@@ -7,6 +7,7 @@ package tracker
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -18,6 +19,11 @@ import (
 
 	"github.com/natalie-o-perret/go-protocols/torrent/bencode"
 	"github.com/natalie-o-perret/go-protocols/torrent/metainfo"
+)
+
+const (
+	maxPeers        = 50
+	maxResponseSize = 4 << 20
 )
 
 // Event is the tracker event parameter defined in BEP 3.
@@ -49,12 +55,17 @@ type AnnounceRequest struct {
 // Peer represents a peer returned by the tracker.
 type Peer struct {
 	IP   net.IP
+	Host string
 	Port uint16
 }
 
-// String returns the peer address as "ip:port".
+// String returns the peer address as "host:port".
 func (p Peer) String() string {
-	return net.JoinHostPort(p.IP.String(), strconv.Itoa(int(p.Port)))
+	host := p.Host
+	if host == "" && p.IP != nil {
+		host = p.IP.String()
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(p.Port)))
 }
 
 // AnnounceResponse contains the parsed response from a tracker announce.
@@ -69,6 +80,11 @@ type AnnounceResponse struct {
 
 // Announce sends an HTTP tracker announce request and returns the parsed response.
 func Announce(trackerURL string, req AnnounceRequest) (*AnnounceResponse, error) {
+	return AnnounceContext(context.Background(), trackerURL, req)
+}
+
+// AnnounceContext sends an HTTP tracker announce request with cancellation.
+func AnnounceContext(ctx context.Context, trackerURL string, req AnnounceRequest) (*AnnounceResponse, error) {
 	u, err := url.Parse(trackerURL)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: parse URL %q: %w", trackerURL, err)
@@ -90,16 +106,26 @@ func Announce(trackerURL string, req AnnounceRequest) (*AnnounceResponse, error)
 	}
 	u.RawQuery = q.Encode()
 
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: create announce request: %w", err)
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(u.String())
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: announce GET: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("tracker: announce returned %s", resp.Status)
+	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read response body: %w", err)
+	}
+	if len(body) > maxResponseSize {
+		return nil, fmt.Errorf("tracker: response exceeds %d bytes", maxResponseSize)
 	}
 
 	return parseResponse(body)
@@ -151,7 +177,7 @@ func parseResponse(data []byte) (*AnnounceResponse, error) {
 			if len(peers)%6 != 0 {
 				return nil, fmt.Errorf("tracker: compact peers length %d not a multiple of 6", len(peers))
 			}
-			for i := 0; i < len(peers); i += 6 {
+			for i := 0; i < len(peers) && len(ar.Peers) < maxPeers; i += 6 {
 				ip := net.IP([]byte(peers[i : i+4]))
 				port := binary.BigEndian.Uint16([]byte(peers[i+4 : i+6]))
 				ar.Peers = append(ar.Peers, Peer{IP: ip, Port: port})
@@ -159,18 +185,26 @@ func parseResponse(data []byte) (*AnnounceResponse, error) {
 		case []any:
 			// Dictionary model (non-compact)
 			for _, p := range peers {
+				if len(ar.Peers) == maxPeers {
+					break
+				}
 				pd, ok := p.(map[string]any)
 				if !ok {
 					continue
 				}
 				peer := Peer{}
 				if ipStr, ok := pd["ip"].(string); ok {
+					peer.Host = ipStr
 					peer.IP = net.ParseIP(ipStr)
 				}
 				if port, ok := pd["port"].(int64); ok {
-					peer.Port = uint16(port)
+					if port > 0 && port <= 65535 {
+						peer.Port = uint16(port)
+					}
 				}
-				ar.Peers = append(ar.Peers, peer)
+				if peer.Host != "" && peer.Port != 0 {
+					ar.Peers = append(ar.Peers, peer)
+				}
 			}
 		}
 	}

@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-A focused, composable BitTorrent protocol library for Go 1.24+.
+A focused, composable BitTorrent protocol library for Go 1.26+.
 
 > [!NOTE]
 > This library implements the core BitTorrent protocol (BEP 3) with a clean,
@@ -15,6 +15,7 @@ A focused, composable BitTorrent protocol library for Go 1.24+.
 
 | Package | Import path | Description |
 | --- | --- | --- |
+| `gotorrent` | `github.com/natalie-o-perret/go-protocols/torrent` | End-to-end BEP 3 downloader |
 | `bencode` | `github.com/natalie-o-perret/go-protocols/torrent/bencode` | Bencoding encoder and decoder |
 | `bitfield` | `github.com/natalie-o-perret/go-protocols/torrent/bitfield` | Compact bitfield for piece tracking |
 | `metainfo` | `github.com/natalie-o-perret/go-protocols/torrent/metainfo` | `.torrent` file parser and InfoHash computation |
@@ -58,7 +59,14 @@ peers, err := tracker.Announce(m.Trackers()[0], tracker.AnnounceRequest{
 go install github.com/natalie-o-perret/go-protocols/torrent/cmd/gotorrent@latest
 
 gotorrent info ubuntu.torrent
+gotorrent download ubuntu.torrent
+gotorrent download -o ubuntu.iso ubuntu.torrent
 ```
+
+`download` discovers peers through HTTP(S) trackers, pipelines block requests,
+verifies every piece before writing it, and supports both single-file and
+multi-file torrents. Output is written to a `.part` path and renamed only after
+the full torrent has passed hash verification.
 
 Example output:
 
@@ -76,11 +84,15 @@ Trackers:
 
 ## Protocol coverage
 
-| BEP                                                     | Description                           | Status        |
-| ------------------------------------------------------- | ------------------------------------- | ------------- |
-| [BEP 3](https://www.bittorrent.org/beps/bep_0003.html)  | The BitTorrent Protocol Specification | Core packages |
-| [BEP 23](https://www.bittorrent.org/beps/bep_0023.html) | Tracker Returns Compact Peer Lists    | `tracker`     |
+| BEP                                                     | Description                           | Status                          |
+| ------------------------------------------------------- | ------------------------------------- | ------------------------------- |
+| [BEP 3](https://www.bittorrent.org/beps/bep_0003.html)  | The BitTorrent Protocol Specification | HTTP tracker and peer downloads |
+| [BEP 23](https://www.bittorrent.org/beps/bep_0023.html) | Tracker Returns Compact Peer Lists    | `tracker`                       |
+
+Magnet links, UDP trackers, DHT, peer exchange, resumable downloads, and
+seeding are not currently implemented. Piece sizes above 64 MiB are rejected
+to bound piece-buffer memory use, and metainfo files are capped at 64 MiB.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
