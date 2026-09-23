@@ -28,9 +28,15 @@ A client, server, and bouncer implementation for IRC in Go.
 ### IRCv3 capabilities advertised by the server
 
 `server-time` · `message-tags` · `batch` · `draft/chathistory` · `echo-message` ·
-`multi-prefix` · `away-notify` · `extended-join` · `setname` · `cap-notify` · `invite-notify`
+`multi-prefix` · `userhost-in-names` · `no-implicit-names` · `away-notify` ·
+`extended-join` · `extended-monitor` · `setname` · `cap-notify` · `invite-notify` ·
+`account-tag` · `account-notify` · `chghost` · `labeled-response` · `standard-replies`
 
-The client also supports SASL PLAIN, EXTERNAL, SCRAM-SHA-256, and SCRAM-SHA-512 when the upstream server advertises them.
+With configured accounts and TLS, the server also advertises `sasl=PLAIN`. A configured strict transport policy adds `sts`.
+This covers the stable IRCv3 capabilities recognised by Ergo. Ergo additionally implements many experimental and vendor caps.
+
+Capabilities are negotiated per connection and rendered per recipient. The client also supports dynamic `CAP NEW` negotiation
+and SASL PLAIN, EXTERNAL, SCRAM-SHA-256, and SCRAM-SHA-512 when the upstream server advertises them.
 
 ## Comparison with existing frameworks
 
@@ -39,7 +45,7 @@ shows how `go-irc` stacks up against the most commonly used Go IRC libraries and
 
 | Project                                              | Protocol parsing | IRC client | IRC server       | Bouncer          | DCC / XDCC | SASL                               | IRCv3 caps | Pure Go  |
 |------------------------------------------------------|------------------|------------|------------------|------------------|------------|------------------------------------|------------|----------|
-| **go-irc** (this repo)                               | yes              | yes        | yes              | yes              | yes        | PLAIN, EXTERNAL, SCRAM-SHA-256/512 | selected   | yes      |
+| **go-irc** (this repo)                               | yes              | yes        | yes              | yes              | yes        | PLAIN, EXTERNAL, SCRAM-SHA-256/512 | extensive  | yes      |
 | [`go-ircevent`](https://github.com/thoj/go-ircevent) | partial          | yes        | no               | no               | no         | no                                 | limited    | yes      |
 | [`girc`](https://github.com/lrstanley/girc)          | yes              | yes        | no               | no               | no         | PLAIN                              | moderate   | yes      |
 | [`Ergo (ergo)`](https://github.com/ergochat/ergo)    | yes              | no         | yes (production) | no               | no         | several                            | extensive  | yes      |
@@ -101,11 +107,25 @@ Example `ircd.toml`:
 name    = "irc.example.com"
 network = "ExampleNet"
 listen  = ":6667"
+tls_listen = ":6697"
+tls_cert_file = "cert.pem"
+tls_key_file = "key.pem"
 motd    = "Welcome to ExampleNet!\nHave fun."
 
 [[server.oper]]
 name     = "admin"
 password = "$2a$10$..."   # bcrypt hash of your oper password
+
+[[server.account]]
+name     = "alice"
+password = "$2a$10$..."   # bcrypt hash used by SASL PLAIN
+host     = "alice.users.example.com"
+
+[server.sts]
+port      = 6697
+duration  = "4320h"
+preload   = false
+hostnames = ["irc.example.com"]
 ```
 
 ### Quick-start: bouncer

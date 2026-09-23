@@ -29,6 +29,7 @@ import (
 
 	"github.com/natalie-o-perret/go-protocols/irc/bouncer/history"
 	goclient "github.com/natalie-o-perret/go-protocols/irc/client"
+	"github.com/natalie-o-perret/go-protocols/irc/client/sasl"
 	"github.com/natalie-o-perret/go-protocols/irc/irc"
 )
 
@@ -156,14 +157,23 @@ func (n *Network) connect() {
 	}
 
 	cfg := goclient.Config{
-		Addr:           n.cfg.Server,
-		Nick:           n.cfg.Nick,
-		User:           n.cfg.User,
-		RealName:       n.cfg.RealName,
-		Password:       n.cfg.Password,
-		TLS:            tlsCfg,
-		AutoReconnect:  true,
-		ReconnectDelay: 15 * time.Second,
+		Addr:               n.cfg.Server,
+		Nick:               n.cfg.Nick,
+		User:               n.cfg.User,
+		RealName:           n.cfg.RealName,
+		Password:           n.cfg.Password,
+		TLS:                tlsCfg,
+		AutoReconnect:      true,
+		ReconnectDelay:     15 * time.Second,
+		DisableDefaultCaps: true,
+		RequestedCaps: []string{
+			irc.CapServerTime, irc.CapMessageTags, irc.CapBatch, irc.CapChatHistory,
+			irc.CapMultiPrefix, irc.CapAwayNotify, irc.CapExtendedJoin,
+			irc.CapSetname, irc.CapInviteNotify,
+		},
+	}
+	if n.cfg.SASLUser != "" {
+		cfg.SASL = &sasl.Plain{Username: n.cfg.SASLUser, Password: n.cfg.SASLPass}
 	}
 
 	n.client = goclient.New(cfg)
@@ -196,6 +206,11 @@ func (n *Network) connect() {
 }
 
 func (n *Network) handleUpstream(msg *irc.Message) {
+	// Upstream capability state belongs to the bouncer connection. Downstream
+	// clients negotiate independently with the bouncer.
+	if msg.Command == irc.CAP {
+		return
+	}
 	// Update state
 	switch msg.Command {
 	case irc.JOIN:
@@ -304,6 +319,35 @@ func (ds *DownstreamSession) send(msg *irc.Message) {
 	if msg.Command == irc.TAGMSG && !ds.caps[irc.CapMessageTags] {
 		return
 	}
+	requiredCap := ""
+	switch msg.Command {
+	case irc.ACCOUNT:
+		requiredCap = irc.CapAccountNotify
+	case irc.AWAY:
+		requiredCap = irc.CapAwayNotify
+	case irc.BATCH:
+		requiredCap = irc.CapBatch
+	case irc.CHGHOST:
+		requiredCap = irc.CapChghost
+	case irc.SETNAME:
+		requiredCap = irc.CapSetname
+	}
+	if requiredCap != "" && !ds.caps[requiredCap] {
+		return
+	}
+	if msg.Command == irc.INVITE && len(msg.Params) > 0 && !ds.caps[irc.CapInviteNotify] {
+		nick := ds.nick
+		if ds.network != nil {
+			ds.network.mu.RLock()
+			if ds.network.state.Nick != "" {
+				nick = ds.network.state.Nick
+			}
+			ds.network.mu.RUnlock()
+		}
+		if !strings.EqualFold(msg.Params[0], nick) {
+			return
+		}
+	}
 	ds.wmu.Lock()
 	defer ds.wmu.Unlock()
 	out := msg
@@ -316,6 +360,10 @@ func (ds *DownstreamSession) send(msg *irc.Message) {
 				cap = irc.CapServerTime
 			case "batch":
 				cap = irc.CapBatch
+			case "account":
+				cap = irc.CapAccountTag
+			case "label":
+				cap = irc.CapLabeledResponse
 			case "draft/chathistory-end":
 				cap = irc.CapChatHistory
 			}
@@ -323,6 +371,10 @@ func (ds *DownstreamSession) send(msg *irc.Message) {
 				delete(out.Tags, tag)
 			}
 		}
+	}
+	if out.Command == irc.JOIN && len(out.Params) > 1 && !ds.caps[irc.CapExtendedJoin] {
+		out = out.Clone()
+		out.Params = out.Params[:1]
 	}
 	line := out.String() + "\r\n"
 	_, _ = ds.writer.WriteString(line)
@@ -504,7 +556,7 @@ func (ds *DownstreamSession) handleCAP(msg *irc.Message, caps map[string]bool, d
 	supportedCaps := []string{
 		irc.CapServerTime, irc.CapMessageTags, irc.CapBatch, irc.CapChatHistory,
 		irc.CapMultiPrefix, irc.CapAwayNotify, irc.CapExtendedJoin,
-		irc.CapSetname, irc.CapCapNotify,
+		irc.CapSetname, irc.CapCapNotify, irc.CapInviteNotify,
 	}
 
 	nick := ds.nick

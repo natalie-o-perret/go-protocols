@@ -6,6 +6,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -54,18 +55,38 @@ func main() {
 	for _, o := range sc.Opers {
 		opers[o.Name] = o.Password
 	}
+	accounts := make(map[string]server.Account, len(sc.Accounts))
+	for _, account := range sc.Accounts {
+		accounts[account.Name] = server.Account{Name: account.Name, PasswordHash: account.Password, Host: account.Host}
+	}
+	var tlsConfig *tls.Config
+	if sc.TLSCertFile != "" {
+		certificate, err := tls.LoadX509KeyPair(sc.TLSCertFile, sc.TLSKeyFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ircd: load TLS certificate: %v\n", err)
+			os.Exit(1)
+		}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+	}
+	var sts *server.STSConfig
+	if sc.STS != nil {
+		sts = &server.STSConfig{Port: sc.STS.Port, Duration: sc.STS.Duration, Preload: sc.STS.Preload, Hostnames: sc.STS.Hostnames}
+	}
 
 	srv := server.New(server.Config{
 		Name:         sc.Name,
 		Network:      sc.Network,
 		Listen:       sc.Listen,
 		TLSListen:    sc.TLSListen,
+		TLSConfig:    tlsConfig,
 		MOTD:         sc.MOTD,
 		MaxClients:   sc.MaxClients,
 		Password:     sc.Password,
 		PingInterval: sc.PingInterval,
 		PingTimeout:  sc.PingTimeout,
 		Opers:        opers,
+		Accounts:     accounts,
+		STS:          sts,
 		Caps:         sc.Caps,
 	})
 

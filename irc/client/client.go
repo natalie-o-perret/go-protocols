@@ -73,6 +73,8 @@ type Config struct {
 	SASL sasl.Mechanism
 	// IRCv3 capabilities to request (in addition to defaults).
 	RequestedCaps []string
+	// DisableDefaultCaps requests only RequestedCaps.
+	DisableDefaultCaps bool
 	// Delay between reconnect attempts.
 	ReconnectDelay time.Duration
 	// If true, automatically reconnect on disconnect.
@@ -381,6 +383,7 @@ func (c *Client) handleCAP(_ *Client, msg *irc.Message) {
 		}
 
 	case irc.CapACK:
+		startSASL := false
 		capStr := ""
 		if len(msg.Params) >= 3 {
 			capStr = strings.TrimPrefix(msg.Params[2], ":")
@@ -389,31 +392,53 @@ func (c *Client) handleCAP(_ *Client, msg *irc.Message) {
 			if strings.HasPrefix(cap, "-") {
 				delete(c.capState.enabled, strings.TrimPrefix(cap, "-"))
 			} else {
+				if cap == irc.CapSASL && !c.capState.enabled[cap] && c.cfg.SASL != nil {
+					startSASL = true
+				}
 				c.capState.enabled[cap] = true
 			}
 		}
 
-		if c.capState.enabled[irc.CapSASL] && c.cfg.SASL != nil {
-			c.capState.phase = capPhaseSASL
-			c.saslMech = c.cfg.SASL
-			if resetter, ok := c.saslMech.(interface{ Reset() }); ok {
-				resetter.Reset()
+		c.capState.pending = nil
+		if c.capState.phase == capPhaseSASL {
+			return
+		}
+		if c.capState.phase == capPhaseDone {
+			if startSASL {
+				c.startSASL()
 			}
-			_ = c.Sendf(irc.AUTHENTICATE, c.saslMech.Name())
+			return
+		}
+		if startSASL {
+			c.startSASL()
 		} else {
 			c.capEnd()
 		}
 
 	case irc.CapNAK:
-		// Cap request denied; move on
-		c.capEnd()
+		c.capState.pending = nil
+		if c.capState.phase != capPhaseDone && c.capState.phase != capPhaseSASL {
+			c.capEnd()
+		}
 
 	case irc.CapNEW:
+		newCaps := make(map[string]bool)
 		if len(msg.Params) >= 3 {
 			for _, token := range strings.Fields(msg.Params[2]) {
 				k, v, _ := strings.Cut(token, "=")
 				c.capState.advertised[k] = v
+				newCaps[k] = true
 			}
+		}
+		var want []string
+		for _, cap := range c.capWantList() {
+			if newCaps[cap] {
+				want = append(want, cap)
+			}
+		}
+		if len(want) > 0 {
+			c.capState.pending = want
+			_ = c.Sendf(irc.CAP, irc.CapREQ, strings.Join(want, " "))
 		}
 
 	case irc.CapDEL:
@@ -477,13 +502,28 @@ func (c *Client) handleAuthenticate(_ *Client, msg *irc.Message) {
 func (c *Client) handleSASLSuccess(_ *Client, _ *irc.Message) {
 	c.saslMech = nil
 	c.saslBuffer = ""
-	c.capEnd()
+	if c.capState.phase != capPhaseDone {
+		c.capEnd()
+	}
 }
 
 func (c *Client) handleSASLFail(_ *Client, _ *irc.Message) {
 	c.saslMech = nil
 	c.saslBuffer = ""
-	c.capEnd()
+	if c.capState.phase != capPhaseDone {
+		c.capEnd()
+	}
+}
+
+func (c *Client) startSASL() {
+	if c.capState.phase != capPhaseDone {
+		c.capState.phase = capPhaseSASL
+	}
+	c.saslMech = c.cfg.SASL
+	if resetter, ok := c.saslMech.(interface{ Reset() }); ok {
+		resetter.Reset()
+	}
+	_ = c.Sendf(irc.AUTHENTICATE, c.saslMech.Name())
 }
 
 func (c *Client) abortSASL() {
@@ -499,23 +539,27 @@ func (c *Client) capEnd() {
 
 // capWantList returns the subset of desired caps that the server advertises.
 func (c *Client) capWantList() []string {
-	defaults := []string{
-		irc.CapServerTime,
-		irc.CapMessageTags,
-		irc.CapBatch,
-		irc.CapEchoMessage,
-		irc.CapMultiPrefix,
-		irc.CapAwayNotify,
-		irc.CapExtendedJoin,
-		irc.CapChghost,
-		irc.CapSetname,
-		irc.CapAccountTag,
-		irc.CapCapNotify,
-		irc.CapChatHistory,
-		irc.CapLabeledResponse,
-		irc.CapUserHostInNames,
-		irc.CapInviteNotify,
-		irc.CapAccountNotify,
+	var defaults []string
+	if !c.cfg.DisableDefaultCaps {
+		defaults = []string{
+			irc.CapServerTime,
+			irc.CapMessageTags,
+			irc.CapBatch,
+			irc.CapEchoMessage,
+			irc.CapMultiPrefix,
+			irc.CapAwayNotify,
+			irc.CapExtendedJoin,
+			irc.CapChghost,
+			irc.CapSetname,
+			irc.CapAccountTag,
+			irc.CapChatHistory,
+			irc.CapLabeledResponse,
+			irc.CapUserHostInNames,
+			irc.CapInviteNotify,
+			irc.CapAccountNotify,
+			irc.CapStandardReplies,
+			irc.CapExtendedMonitor,
+		}
 	}
 	if c.cfg.SASL != nil {
 		defaults = append(defaults, irc.CapSASL)

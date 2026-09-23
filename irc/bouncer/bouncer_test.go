@@ -64,3 +64,26 @@ func TestChatHistoryLatest(t *testing.T) {
 		t.Fatalf("batch end: %q", lines[3])
 	}
 }
+
+func TestCapabilityFiltering(t *testing.T) {
+	conn := &recordingConn{}
+	ds := newDownstreamSession(conn, &Bouncer{})
+	ds.nick = "me"
+	ds.network = newNetwork(NetworkConfig{}, history.NewMemoryStore(1))
+	ds.network.state.Nick = "upstream-me"
+	ds.caps = map[string]bool{irc.CapMessageTags: true}
+
+	ds.send(irc.MustParse("@account=alice;label=req :alice!u@h PRIVMSG #test :hi"))
+	ds.send(irc.MustParse(":alice!u@h AWAY :gone"))
+	ds.send(irc.MustParse(":alice!u@h JOIN #test alice :Alice"))
+	ds.send(irc.MustParse(":alice!u@h INVITE other #test"))
+	ds.send(irc.MustParse(":alice!u@h INVITE upstream-me #test"))
+
+	got := conn.String()
+	if strings.Contains(got, "account=") || strings.Contains(got, "label=") || strings.Contains(got, " AWAY ") || strings.Contains(got, "INVITE other") {
+		t.Fatalf("leaked capability-owned data: %q", got)
+	}
+	if !strings.Contains(got, " JOIN #test\r\n") || !strings.Contains(got, " INVITE upstream-me #test\r\n") {
+		t.Fatalf("missing transformed messages: %q", got)
+	}
+}
