@@ -327,4 +327,10 @@ const (
 	ERR_SASLABORTED Numeric = 906
 	ERR_SASLALREADY Numeric = 907
 	RPL_SASLMECHS   Numeric = 908
+
+	RPL_MONONLINE    Numeric = 730
+	RPL_MONOFFLINE   Numeric = 731
+	RPL_MONLIST      Numeric = 732
+	RPL_ENDOFMONLIST Numeric = 733
+	ERR_MONLISTFULL  Numeric = 734
 )

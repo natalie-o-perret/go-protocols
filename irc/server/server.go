@@ -4,6 +4,7 @@ package server
 
 import (
 	"bufio"
+	"crypto/rand"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/natalie-o-perret/go-protocols/irc/irc"
 	"github.com/natalie-o-perret/go-protocols/irc/server/mode"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // ---------------------------------------------------------------------------
@@ -38,26 +40,44 @@ type Membership struct {
 
 // Session is a single connected IRC client managed by the server.
 type Session struct {
-	conn      net.Conn
-	writer    *bufio.Writer
-	server    *Server
-	writerMu  sync.Mutex
-	historyMu sync.RWMutex
+	conn       net.Conn
+	writer     *bufio.Writer
+	server     *Server
+	writerMu   sync.Mutex
+	historyMu  sync.RWMutex
+	identityMu sync.RWMutex
+	writeMu    sync.Mutex
+	writeQueue []outbound
+	writeBytes int
+	writeWake  chan struct{}
+	writerDone chan struct{}
+	stopWriter chan struct{}
+	asyncWrite bool
 
 	// Registration fields
-	nick     string
-	user     string
-	host     string
-	realname string
-	account  string
-	away     string
-	modes    *mode.Set
-	caps     map[string]bool
-	history  map[string][]*historyEntry
-	state    SessionState
+	nick       string
+	user       string
+	host       string
+	realname   string
+	account    string
+	away       string
+	secure     bool
+	serverName string
+	modes      *mode.Set
+	caps       map[string]bool
+	history    map[string][]*historyEntry
+	state      SessionState
+	monitorMu  sync.RWMutex
+	monitor    map[string]string
 
 	// CAP negotiation
-	capVersion int // 302 or 0
+	capVersion        int // 302 or 0
+	saslActive        bool
+	saslBuffer        string
+	responseLabel     string
+	response          []*irc.Message
+	responseImmediate []*irc.Message
+	captureImmediate  bool
 
 	// Timing
 	idleAt   time.Time
@@ -67,19 +87,36 @@ type Session struct {
 	isOper bool
 }
 
+type outbound struct {
+	line string
+	done chan struct{}
+}
+
+const maxQueuedOutput = 16 << 20
+
+type responseState struct {
+	label     string
+	messages  []*irc.Message
+	immediate []*irc.Message
+}
+
 func newSession(conn net.Conn, srv *Server) *Session {
 	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 	return &Session{
-		conn:     conn,
-		writer:   bufio.NewWriterSize(conn, 4096),
-		server:   srv,
-		host:     host,
-		modes:    mode.New(),
-		caps:     make(map[string]bool),
-		history:  make(map[string][]*historyEntry),
-		state:    StatePreReg,
-		idleAt:   time.Now(),
-		signOnAt: time.Now(),
+		conn:       conn,
+		writer:     bufio.NewWriterSize(conn, 4096),
+		server:     srv,
+		host:       host,
+		modes:      mode.New(),
+		caps:       make(map[string]bool),
+		history:    make(map[string][]*historyEntry),
+		monitor:    make(map[string]string),
+		writeWake:  make(chan struct{}, 1),
+		writerDone: make(chan struct{}),
+		stopWriter: make(chan struct{}),
+		state:      StatePreReg,
+		idleAt:     time.Now(),
+		signOnAt:   time.Now(),
 	}
 }
 
@@ -111,7 +148,15 @@ func (s *Session) historyTargets() map[string][]*historyEntry {
 
 // Prefix returns the full nick!user@host prefix for this session.
 func (s *Session) Prefix() *irc.Prefix {
+	s.identityMu.RLock()
+	defer s.identityMu.RUnlock()
 	return &irc.Prefix{Nick: s.nick, User: s.user, Host: s.host}
+}
+
+func (s *Session) identity() (account, host string) {
+	s.identityMu.RLock()
+	defer s.identityMu.RUnlock()
+	return s.account, s.host
 }
 
 // Send writes a message to this session.
@@ -122,8 +167,29 @@ func (s *Session) Send(msg *irc.Message) {
 	s.writerMu.Lock()
 	defer s.writerMu.Unlock()
 	out := msg
-	if len(msg.Tags) > 0 {
+	if len(msg.Tags) > 0 || s.capEnabled(irc.CapServerTime) || s.capEnabled(irc.CapAccountTag) {
 		out = msg.Clone()
+		if s.capEnabled(irc.CapServerTime) {
+			if out.Tags == nil {
+				out.Tags = make(irc.Tags)
+			}
+			if _, ok := out.Tags["time"]; !ok {
+				out.Tags["time"] = serverTime(timeNow())
+			}
+		}
+		if s.capEnabled(irc.CapAccountTag) && out.Prefix != nil && out.Prefix.User != "" {
+			if source, ok := s.server.sessions.Get(out.Prefix.Nick); ok {
+				account, _ := source.identity()
+				if account != "" {
+					if out.Tags == nil {
+						out.Tags = make(irc.Tags)
+					}
+					if _, exists := out.Tags["account"]; !exists {
+						out.Tags["account"] = account
+					}
+				}
+			}
+		}
 		for tag := range out.Tags {
 			cap := irc.CapMessageTags
 			switch tag {
@@ -131,6 +197,10 @@ func (s *Session) Send(msg *irc.Message) {
 				cap = irc.CapServerTime
 			case "batch":
 				cap = irc.CapBatch
+			case "account":
+				cap = irc.CapAccountTag
+			case "label":
+				cap = irc.CapLabeledResponse
 			case "draft/chathistory-end":
 				cap = irc.CapChatHistory
 			}
@@ -140,8 +210,187 @@ func (s *Session) Send(msg *irc.Message) {
 		}
 	}
 	line := out.String() + "\r\n"
-	_, _ = s.writer.WriteString(line)
-	_ = s.writer.Flush()
+	if s.response != nil {
+		if s.captureImmediate {
+			s.responseImmediate = append(s.responseImmediate, out.Clone())
+		} else {
+			s.response = append(s.response, out.Clone())
+		}
+		return
+	}
+	if s.asyncWrite {
+		s.enqueue(outbound{line: line})
+		return
+	}
+	_ = s.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	defer func() { _ = s.conn.SetWriteDeadline(time.Time{}) }()
+	if _, err := s.writer.WriteString(line); err != nil {
+		_ = s.conn.Close()
+		return
+	}
+	if err := s.writer.Flush(); err != nil {
+		_ = s.conn.Close()
+	}
+}
+
+func (s *Session) sendImmediate(msg *irc.Message) {
+	s.captureImmediate = true
+	s.Send(msg)
+	s.captureImmediate = false
+}
+
+func (s *Session) beginResponse(label string) {
+	s.responseLabel = label
+	s.response = make([]*irc.Message, 0, 1)
+	s.responseImmediate = nil
+}
+
+func (s *Session) suspendResponse() responseState {
+	state := responseState{label: s.responseLabel, messages: s.response, immediate: s.responseImmediate}
+	s.responseLabel, s.response, s.responseImmediate = "", nil, nil
+	return state
+}
+
+func (s *Session) resumeResponse(state responseState) {
+	s.responseLabel, s.response, s.responseImmediate = state.label, state.messages, state.immediate
+}
+
+func (s *Session) finishResponse() []*irc.Message {
+	label, messages := s.responseLabel, s.response
+	immediate := s.responseImmediate
+	s.responseLabel, s.response = "", nil
+	s.responseImmediate = nil
+	if len(messages) == 0 {
+		return append(immediate, s.responseMessage(&irc.Message{Tags: irc.Tags{"label": label}, Prefix: &irc.Prefix{Nick: s.server.cfg.Name}, Command: irc.ACK}))
+	}
+	if len(messages) == 1 {
+		messages[0].Tags = cloneTags(messages[0].Tags)
+		messages[0].Tags["label"] = label
+		return append(immediate, messages[0])
+	}
+	if messages[0].Command == irc.BATCH && strings.HasPrefix(messages[0].Param(0), "+") {
+		messages[0].Tags = cloneTags(messages[0].Tags)
+		messages[0].Tags["label"] = label
+		return append(immediate, messages...)
+	}
+	batchID := rand.Text()
+	out := append(immediate, s.responseMessage(&irc.Message{Tags: irc.Tags{"label": label}, Prefix: &irc.Prefix{Nick: s.server.cfg.Name}, Command: irc.BATCH, Params: []string{"+" + batchID, "labeled-response"}}))
+	for _, msg := range messages {
+		msg.Tags = cloneTags(msg.Tags)
+		msg.Tags["batch"] = batchID
+		out = append(out, msg)
+	}
+	return append(out, s.responseMessage(&irc.Message{Prefix: &irc.Prefix{Nick: s.server.cfg.Name}, Command: irc.BATCH, Params: []string{"-" + batchID}}))
+}
+
+func (s *Session) responseMessage(msg *irc.Message) *irc.Message {
+	if !s.capEnabled(irc.CapServerTime) {
+		return msg
+	}
+	out := msg.Clone()
+	if out.Tags == nil {
+		out.Tags = make(irc.Tags)
+	}
+	out.Tags["time"] = serverTime(timeNow())
+	return out
+}
+
+func (s *Session) sendPrepared(messages []*irc.Message) {
+	s.writerMu.Lock()
+	defer s.writerMu.Unlock()
+	if s.asyncWrite {
+		for _, msg := range messages {
+			s.enqueue(outbound{line: msg.String() + "\r\n"})
+		}
+		return
+	}
+	_ = s.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	defer func() { _ = s.conn.SetWriteDeadline(time.Time{}) }()
+	for _, msg := range messages {
+		if _, err := s.writer.WriteString(msg.String() + "\r\n"); err != nil {
+			_ = s.conn.Close()
+			return
+		}
+	}
+	if err := s.writer.Flush(); err != nil {
+		_ = s.conn.Close()
+	}
+}
+
+func (s *Session) writerLoop() {
+	defer close(s.writerDone)
+	for {
+		select {
+		case <-s.writeWake:
+			for {
+				s.writeMu.Lock()
+				if len(s.writeQueue) == 0 {
+					s.writeMu.Unlock()
+					break
+				}
+				item := s.writeQueue[0]
+				s.writeQueue = s.writeQueue[1:]
+				s.writeBytes -= len(item.line)
+				s.writeMu.Unlock()
+				if item.line != "" {
+					_ = s.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+					if _, err := s.writer.WriteString(item.line); err != nil {
+						_ = s.conn.Close()
+						return
+					}
+					if err := s.writer.Flush(); err != nil {
+						_ = s.conn.Close()
+						return
+					}
+					_ = s.conn.SetWriteDeadline(time.Time{})
+				}
+				if item.done != nil {
+					close(item.done)
+				}
+			}
+		case <-s.stopWriter:
+			return
+		}
+	}
+}
+
+func (s *Session) enqueue(item outbound) {
+	s.writeMu.Lock()
+	if s.writeBytes+len(item.line) > maxQueuedOutput {
+		s.writeMu.Unlock()
+		if item.done != nil {
+			close(item.done)
+		}
+		_ = s.conn.Close()
+		return
+	}
+	s.writeQueue = append(s.writeQueue, item)
+	s.writeBytes += len(item.line)
+	s.writeMu.Unlock()
+	select {
+	case s.writeWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Session) flush() {
+	if !s.asyncWrite {
+		return
+	}
+	done := make(chan struct{})
+	s.enqueue(outbound{done: done})
+	select {
+	case <-done:
+	case <-s.writerDone:
+	}
+}
+
+func cloneTags(tags irc.Tags) irc.Tags {
+	out := make(irc.Tags, len(tags)+1)
+	for key, value := range tags {
+		out[key] = value
+	}
+	return out
 }
 
 // Sendf builds and sends a simple message.
@@ -170,7 +419,7 @@ func (s *Session) capEnabled(cap string) bool {
 
 // mask returns nick!user@host.
 func (s *Session) mask() string {
-	return s.nick + "!" + s.user + "@" + s.host
+	return s.Prefix().String()
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +458,9 @@ func (r *Registry) Rename(oldNick, newNick string) error {
 	newKey := strings.ToLower(newNick)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if oldKey == newKey {
+		return nil
+	}
 	s, ok := r.sessions[oldKey]
 	if !ok {
 		return fmt.Errorf("nick %q not found", oldNick)
@@ -219,6 +471,23 @@ func (r *Registry) Rename(oldNick, newNick string) error {
 	delete(r.sessions, oldKey)
 	r.sessions[newKey] = s
 	return nil
+}
+
+func (s *Session) isMonitoring(nick string) bool {
+	s.monitorMu.RLock()
+	defer s.monitorMu.RUnlock()
+	_, ok := s.monitor[strings.ToLower(nick)]
+	return ok
+}
+
+func (s *Session) monitorSnapshot() []string {
+	s.monitorMu.RLock()
+	defer s.monitorMu.RUnlock()
+	out := make([]string, 0, len(s.monitor))
+	for _, nick := range s.monitor {
+		out = append(out, nick)
+	}
+	return out
 }
 
 func (r *Registry) Get(nick string) (*Session, bool) {
@@ -318,7 +587,12 @@ func (ch *Channel) HasMember(nick string) bool {
 func (ch *Channel) GetMembership(nick string) *Membership {
 	ch.mu.RLock()
 	defer ch.mu.RUnlock()
-	return ch.members[strings.ToLower(nick)]
+	membership := ch.members[strings.ToLower(nick)]
+	if membership == nil {
+		return nil
+	}
+	copy := *membership
+	return &copy
 }
 
 // Members returns a snapshot of all memberships.
@@ -327,7 +601,8 @@ func (ch *Channel) Members() []*Membership {
 	defer ch.mu.RUnlock()
 	out := make([]*Membership, 0, len(ch.members))
 	for _, m := range ch.members {
-		out = append(out, m)
+		copy := *m
+		out = append(out, &copy)
 	}
 	return out
 }
@@ -362,6 +637,35 @@ func (ch *Channel) NamesReply(multiPrefix bool) []string {
 		names = append(names, prefix+m.Session.nick)
 	}
 	return names
+}
+
+func (ch *Channel) applyMembershipMode(change irc.ModeChange) bool {
+	index := strings.IndexRune("qaohv", change.Mode)
+	if index < 0 || change.Arg == "" {
+		return false
+	}
+	prefix := "~&@%+"[index]
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	membership := ch.members[strings.ToLower(change.Arg)]
+	if membership == nil {
+		return false
+	}
+	current := strings.ReplaceAll(membership.Prefix, string(prefix), "")
+	if change.Add {
+		current += string(prefix)
+	}
+	var ordered strings.Builder
+	for _, candidate := range "~&@%+" {
+		if strings.ContainsRune(current, candidate) {
+			ordered.WriteRune(candidate)
+		}
+	}
+	if membership.Prefix == ordered.String() {
+		return false
+	}
+	membership.Prefix = ordered.String()
+	return true
 }
 
 // ChannelRegistry maps channel names to Channel objects.
@@ -439,12 +743,32 @@ type Config struct {
 	Password string
 	// Opers maps oper name to bcrypt hashed password.
 	Opers map[string]string
-	// Caps is the list of extra caps to advertise.
+	// Accounts maps case-insensitive account names to SASL credentials.
+	Accounts map[string]Account
+	// STS is the optional strict transport security policy.
+	STS *STSConfig
+	// Caps is retained for configuration compatibility.
+	// Deprecated: capabilities without implementations are ignored.
 	Caps []string
 	// PingInterval is how often to ping idle clients.
 	PingInterval time.Duration
 	// PingTimeout is disconnect timeout after no PONG.
 	PingTimeout time.Duration
+}
+
+// Account is a configured SASL account.
+type Account struct {
+	Name         string
+	PasswordHash string
+	Host         string
+}
+
+// STSConfig controls strict transport security advertisement.
+type STSConfig struct {
+	Port      int
+	Duration  time.Duration
+	Preload   bool
+	Hostnames []string
 }
 
 func (c *Config) setDefaults() {
@@ -467,10 +791,12 @@ func (c *Config) setDefaults() {
 
 // Server is the IRC server.
 type Server struct {
-	cfg      Config
-	sessions *Registry
-	channels *ChannelRegistry
-	log      *slog.Logger
+	cfg               Config
+	sessions          *Registry
+	channels          *ChannelRegistry
+	log               *slog.Logger
+	accounts          map[string]Account
+	dummyPasswordHash string
 
 	// Stats
 	clientsTotal   atomic.Int64
@@ -479,6 +805,7 @@ type Server struct {
 	// Listeners (for graceful shutdown)
 	listenerMu sync.Mutex
 	listeners  []net.Listener
+	dispatchMu sync.RWMutex
 
 	// WhoWas ring buffer (simple slice for now)
 	whowasMu sync.Mutex
@@ -496,17 +823,37 @@ type whowasEntry struct {
 // New creates a new Server with the given config.
 func New(cfg Config) *Server {
 	cfg.setDefaults()
+	accounts := make(map[string]Account, len(cfg.Accounts))
+	passwordCost := bcrypt.DefaultCost
+	for name, account := range cfg.Accounts {
+		if account.Name == "" {
+			account.Name = name
+		}
+		accounts[strings.ToLower(name)] = account
+		if cost, err := bcrypt.Cost([]byte(account.PasswordHash)); err == nil {
+			passwordCost = cost
+		}
+	}
+	var dummyHash []byte
+	if len(accounts) > 0 {
+		dummyHash, _ = bcrypt.GenerateFromPassword([]byte("invalid"), passwordCost)
+	}
 	return &Server{
-		cfg:      cfg,
-		sessions: newRegistry(),
-		channels: newChannelRegistry(),
-		log:      slog.Default(),
-		whowas:   make([]whowasEntry, 0, 64),
+		cfg:               cfg,
+		sessions:          newRegistry(),
+		channels:          newChannelRegistry(),
+		log:               slog.Default(),
+		accounts:          accounts,
+		dummyPasswordHash: string(dummyHash),
+		whowas:            make([]whowasEntry, 0, 64),
 	}
 }
 
 // ListenAndServe starts the server listeners.
 func (srv *Server) ListenAndServe() error {
+	if err := srv.validateConfig(); err != nil {
+		return err
+	}
 	errCh := make(chan error, 2)
 
 	ln, err := net.Listen("tcp", srv.cfg.Listen)
@@ -535,6 +882,9 @@ func (srv *Server) ListenAndServe() error {
 // (or 127.0.0.1:0 if Listen is empty) and returns the actual address.
 // Call ServeListener to start accepting connections.
 func (srv *Server) ListenRandom() (string, error) {
+	if err := srv.validateConfig(); err != nil {
+		return "", err
+	}
 	listen := srv.cfg.Listen
 	if listen == "" {
 		listen = "127.0.0.1:0"
@@ -574,32 +924,86 @@ func (srv *Server) trackListener(ln net.Listener) {
 	srv.listenerMu.Unlock()
 }
 
-func (srv *Server) acceptLoop(ln net.Listener, tls bool) error {
+func (srv *Server) acceptLoop(ln net.Listener, secure bool) error {
 	defer func() { _ = ln.Close() }()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return err
 		}
-		if srv.cfg.MaxClients > 0 && int(srv.clientsCurrent.Load()) >= srv.cfg.MaxClients {
+		current := srv.clientsCurrent.Add(1)
+		if srv.cfg.MaxClients > 0 && int(current) > srv.cfg.MaxClients {
+			srv.clientsCurrent.Add(-1)
 			_, _ = conn.Write([]byte("ERROR :Server is full\r\n"))
 			_ = conn.Close()
 			continue
 		}
-		s := newSession(conn, srv)
-		if tls {
-			s.modes.Apply([]irc.ModeChange{{Add: true, Mode: 'z'}}, mode.UserValidator{})
-		}
-		srv.clientsTotal.Add(1)
-		srv.clientsCurrent.Add(1)
-		go srv.handleSession(s)
+		go srv.startSession(conn, secure)
 	}
 }
 
+func (srv *Server) startSession(conn net.Conn, secure bool) {
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		_ = tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+		if err := tlsConn.Handshake(); err != nil {
+			_ = conn.Close()
+			srv.clientsCurrent.Add(-1)
+			return
+		}
+		_ = tlsConn.SetDeadline(time.Time{})
+	}
+	s := newSession(conn, srv)
+	s.secure = secure
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		s.serverName = tlsConn.ConnectionState().ServerName
+	}
+	if secure {
+		s.modes.Apply([]irc.ModeChange{{Add: true, Mode: 'z'}}, mode.UserValidator{})
+	}
+	srv.clientsTotal.Add(1)
+	srv.handleSession(s)
+}
+
+func (srv *Server) validateConfig() error {
+	if srv.cfg.TLSListen != "" && srv.cfg.TLSConfig == nil {
+		return fmt.Errorf("server: TLSListen requires TLSConfig")
+	}
+	passwordCost := -1
+	for name, account := range srv.accounts {
+		cost, err := bcrypt.Cost([]byte(account.PasswordHash))
+		if err != nil {
+			return fmt.Errorf("server: invalid password hash for account %q", name)
+		}
+		if passwordCost < 0 {
+			passwordCost = cost
+		} else if cost != passwordCost {
+			return fmt.Errorf("server: account password hashes must use the same bcrypt cost")
+		}
+	}
+	if srv.cfg.STS == nil {
+		return nil
+	}
+	sts := srv.cfg.STS
+	if sts.Port < 1 || sts.Port > 65535 || sts.Duration < 0 || sts.Preload && sts.Duration == 0 {
+		return fmt.Errorf("server: invalid STS policy")
+	}
+	if srv.cfg.TLSListen == "" || srv.cfg.TLSConfig == nil || len(sts.Hostnames) == 0 {
+		return fmt.Errorf("server: STS requires TLS and at least one hostname")
+	}
+	return nil
+}
+
 func (srv *Server) handleSession(s *Session) {
+	s.asyncWrite = true
+	go s.writerLoop()
 	defer func() {
 		srv.clientsCurrent.Add(-1)
+		srv.dispatchMu.RLock()
 		srv.removeSession(s)
+		srv.dispatchMu.RUnlock()
+		close(s.stopWriter)
+		<-s.writerDone
+		_ = s.conn.Close()
 	}()
 
 	scanner := bufio.NewScanner(s.conn)
@@ -608,7 +1012,9 @@ func (srv *Server) handleSession(s *Session) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if irc.InputTooLong(line) {
+			srv.dispatchMu.RLock()
 			s.SendNumeric(irc.ERR_INPUTTOOLONG, "Input line was too long")
+			srv.dispatchMu.RUnlock()
 			continue
 		}
 		msg, err := irc.Parse(line)
@@ -616,7 +1022,7 @@ func (srv *Server) handleSession(s *Session) {
 			continue
 		}
 		s.idleAt = time.Now()
-		srv.dispatch(s, msg)
+		srv.dispatchCommand(s, msg)
 	}
 }
 
@@ -624,10 +1030,11 @@ func (srv *Server) removeSession(s *Session) {
 	if s.nick != "" {
 		// Record in whowas
 		srv.whowasMu.Lock()
+		_, host := s.identity()
 		srv.whowas = append(srv.whowas, whowasEntry{
 			nick:     s.nick,
 			user:     s.user,
-			host:     s.host,
+			host:     host,
 			realname: s.realname,
 			quitAt:   time.Now(),
 		})
@@ -636,7 +1043,6 @@ func (srv *Server) removeSession(s *Session) {
 		}
 		srv.whowasMu.Unlock()
 
-		srv.sessions.Remove(s.nick)
 		// Part all channels
 		for _, ch := range srv.channels.All() {
 			if !ch.HasMember(s.nick) {
@@ -652,12 +1058,15 @@ func (srv *Server) removeSession(s *Session) {
 				srv.channels.Remove(ch.name)
 			}
 		}
+		srv.sessions.Remove(s.nick)
+		srv.notifyMonitorOffline(s.nick)
 	}
-	_ = s.conn.Close()
 }
 
 // Broadcast sends a message to all registered sessions.
 func (srv *Server) Broadcast(msg *irc.Message) {
+	srv.dispatchMu.RLock()
+	defer srv.dispatchMu.RUnlock()
 	for _, s := range srv.sessions.All() {
 		s.Send(msg)
 	}
@@ -687,34 +1096,59 @@ func (srv *Server) isupport() []string {
 		"INVEX",
 		"EXCEPTS",
 		"CALLERID",
+		"MONITOR=100",
 		"CHATHISTORY=50",
 		"MSGREFTYPES=timestamp,msgid",
 	}
 }
 
 // supportedCaps returns the set of caps this server supports.
-func (srv *Server) supportedCaps() map[string]string {
+func (srv *Server) supportedCaps(s *Session) map[string]string {
 	caps := map[string]string{
-		irc.CapServerTime:   "",
-		irc.CapMessageTags:  "",
-		irc.CapBatch:        "",
-		irc.CapChatHistory:  "",
-		irc.CapEchoMessage:  "",
-		irc.CapMultiPrefix:  "",
-		irc.CapAwayNotify:   "",
-		irc.CapExtendedJoin: "",
-		irc.CapSetname:      "",
-		irc.CapCapNotify:    "",
-		irc.CapInviteNotify: "",
+		irc.CapServerTime:      "",
+		irc.CapMessageTags:     "",
+		irc.CapBatch:           "",
+		irc.CapChatHistory:     "",
+		irc.CapEchoMessage:     "",
+		irc.CapMultiPrefix:     "",
+		irc.CapAwayNotify:      "",
+		irc.CapExtendedJoin:    "",
+		irc.CapSetname:         "",
+		irc.CapCapNotify:       "",
+		irc.CapInviteNotify:    "",
+		irc.CapUserHostInNames: "",
+		irc.CapNoImplicitNames: "",
+		irc.CapStandardReplies: "",
+		irc.CapAccountTag:      "",
+		irc.CapAccountNotify:   "",
+		irc.CapChghost:         "",
+		irc.CapExtendedMonitor: "",
+		irc.CapLabeledResponse: "",
 	}
-	for _, c := range srv.cfg.Caps {
-		k, v, _ := strings.Cut(c, "=")
-		if k == irc.CapSASL {
-			continue
+	if s != nil && s.secure && len(srv.accounts) > 0 {
+		caps[irc.CapSASL] = "PLAIN"
+	}
+	if s != nil && s.capVersion >= 302 && srv.cfg.STS != nil {
+		if !s.secure {
+			caps[irc.CapSTS] = fmt.Sprintf("port=%d", srv.cfg.STS.Port)
+		} else if slicesContainsFold(srv.cfg.STS.Hostnames, s.serverName) {
+			value := fmt.Sprintf("duration=%d", int64(srv.cfg.STS.Duration/time.Second))
+			if srv.cfg.STS.Preload {
+				value += ",preload"
+			}
+			caps[irc.CapSTS] = value
 		}
-		caps[k] = v
 	}
 	return caps
+}
+
+func slicesContainsFold(values []string, value string) bool {
+	for _, candidate := range values {
+		if strings.EqualFold(candidate, value) {
+			return true
+		}
+	}
+	return false
 }
 
 // serverTime returns the current time in IRCv3 server-time format.

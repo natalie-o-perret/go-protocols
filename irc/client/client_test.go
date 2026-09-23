@@ -46,6 +46,58 @@ func TestCAPWireFormatAndDisable(t *testing.T) {
 	}
 }
 
+func TestCAPNEWRequestsDesiredCapability(t *testing.T) {
+	c, output := clientWithWriter()
+	c.capState.phase = capPhaseDone
+	c.capState.advertised[irc.CapMessageTags] = "" // previously rejected
+	c.handleCAP(c, irc.MustParse(":server CAP nick NEW :standard-replies"))
+
+	if got, want := output.String(), "CAP REQ standard-replies\r\n"; got != want {
+		t.Fatalf("CAP REQ: got %q want %q", got, want)
+	}
+	output.Reset()
+	c.handleCAP(c, irc.MustParse(":server CAP nick ACK :standard-replies"))
+	if !c.CAPEnabled(irc.CapStandardReplies) || output.Len() != 0 {
+		t.Fatalf("dynamic ACK: enabled=%v output=%q", c.CAPEnabled(irc.CapStandardReplies), output.String())
+	}
+}
+
+func TestCAPNEWDynamicallyStartsSASL(t *testing.T) {
+	mechanism := &framingMechanism{}
+	c := New(Config{SASL: mechanism})
+	output := &bytes.Buffer{}
+	c.writer = bufio.NewWriter(output)
+	c.capState.phase = capPhaseDone
+	c.handleCAP(c, irc.MustParse(":server CAP nick NEW :sasl=TEST"))
+	c.handleCAP(c, irc.MustParse(":server CAP nick ACK :sasl"))
+
+	if got := output.String(); got != "CAP REQ sasl\r\nAUTHENTICATE TEST\r\n" {
+		t.Fatalf("dynamic SASL: %q", got)
+	}
+}
+
+func TestCAPACKDoesNotRestartActiveSASL(t *testing.T) {
+	mechanism := &framingMechanism{}
+	c := New(Config{SASL: mechanism})
+	output := &bytes.Buffer{}
+	c.writer = bufio.NewWriter(output)
+	c.capState.phase = capPhaseSASL
+	c.capState.enabled[irc.CapSASL] = true
+	c.handleCAP(c, irc.MustParse(":server CAP nick ACK :standard-replies"))
+	if output.Len() != 0 || c.capState.phase != capPhaseSASL {
+		t.Fatalf("active SASL was disturbed: phase=%v output=%q", c.capState.phase, output.String())
+	}
+}
+
+func TestDisableDefaultCaps(t *testing.T) {
+	c := New(Config{DisableDefaultCaps: true, RequestedCaps: []string{irc.CapServerTime}})
+	c.capState.advertised[irc.CapServerTime] = ""
+	c.capState.advertised[irc.CapAccountTag] = ""
+	if got := c.capWantList(); len(got) != 1 || got[0] != irc.CapServerTime {
+		t.Fatalf("requested caps: %v", got)
+	}
+}
+
 func TestSASLIncomingChunks(t *testing.T) {
 	c, _ := clientWithWriter()
 	mechanism := &framingMechanism{}

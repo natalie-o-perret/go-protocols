@@ -55,6 +55,7 @@ const (
 	WALLOPS  = "WALLOPS"
 	USERHOST = "USERHOST"
 	ISON     = "ISON"
+	MONITOR  = "MONITOR"
 
 	// IRCv3
 	CAP          = "CAP"
@@ -110,4 +111,8 @@ const (
 	CapUserHostInNames       = "userhost-in-names"
 	CapInviteNotify          = "invite-notify"
 	CapAccountNotify         = "account-notify"
+	CapNoImplicitNames       = "no-implicit-names"
+	CapStandardReplies       = "standard-replies"
+	CapExtendedMonitor       = "extended-monitor"
+	CapSTS                   = "sts"
 )

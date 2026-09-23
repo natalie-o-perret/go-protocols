@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"slices"
 	"strconv"
@@ -11,6 +12,22 @@ import (
 	"github.com/natalie-o-perret/go-protocols/irc/irc"
 	"github.com/natalie-o-perret/go-protocols/irc/server/mode"
 )
+
+func (srv *Server) dispatchCommand(s *Session, msg *irc.Message) {
+	label, ok := msg.Tags.Get("label")
+	if !ok || label == "" || len(label) > 64 || msg.Command == irc.QUIT || !s.capEnabled(irc.CapLabeledResponse) || !s.capEnabled(irc.CapBatch) {
+		srv.dispatchMu.RLock()
+		srv.dispatch(s, msg)
+		srv.dispatchMu.RUnlock()
+		return
+	}
+	srv.dispatchMu.Lock()
+	s.beginResponse(label)
+	srv.dispatch(s, msg)
+	response := s.finishResponse()
+	srv.dispatchMu.Unlock()
+	s.sendPrepared(response)
+}
 
 // dispatch routes a message to the appropriate handler.
 func (srv *Server) dispatch(s *Session, msg *irc.Message) {
@@ -38,6 +55,9 @@ func (srv *Server) dispatch(s *Session, msg *irc.Message) {
 		return
 	case irc.PONG:
 		return // no-op
+	case irc.AUTHENTICATE:
+		srv.handleAuthenticate(s, msg)
+		return
 	}
 
 	// Require registration for everything else
@@ -92,6 +112,8 @@ func (srv *Server) dispatch(s *Session, msg *irc.Message) {
 		srv.handleUserhost(s, msg)
 	case irc.ISON:
 		srv.handleIson(s, msg)
+	case irc.MONITOR:
+		srv.handleMonitor(s, msg)
 
 	// Server
 	case irc.PING:
@@ -173,15 +195,23 @@ func (srv *Server) handleNickRegistered(s *Session, msg *irc.Message) {
 		return
 	}
 	oldNick := s.nick
+	oldPrefix := s.Prefix()
 	if err := srv.sessions.Rename(oldNick, newNick); err != nil {
 		s.SendNumeric(irc.ERR_NICKNAMEINUSE, newNick, "Nickname is already in use")
 		return
 	}
 	s.nick = newNick
+	if !strings.EqualFold(oldNick, newNick) {
+		srv.notifyMonitorOffline(oldNick)
+		srv.notifyMonitorOnline(s)
+	}
 	nickMsg := &irc.Message{
-		Prefix:  &irc.Prefix{Nick: oldNick, User: s.user, Host: s.host},
+		Prefix:  oldPrefix,
 		Command: irc.NICK,
 		Params:  []string{newNick},
+	}
+	if account, _ := s.identity(); account != "" {
+		nickMsg.Tags = irc.Tags{"account": account}
 	}
 	s.Send(nickMsg)
 	// Broadcast to shared channels
@@ -239,6 +269,7 @@ func (srv *Server) tryRegister(s *Session) {
 	}
 
 	s.state = StateRegistered
+	srv.notifyMonitorOnline(s)
 
 	// Send welcome sequence
 	s.SendNumeric(irc.RPL_WELCOME, fmt.Sprintf("Welcome to the %s IRC Network %s", srv.cfg.Network, s.mask()))
@@ -277,7 +308,7 @@ func (srv *Server) handleCAP(s *Session, msg *irc.Message) {
 		subArg = msg.Params[1]
 	}
 
-	supported := srv.supportedCaps()
+	supported := srv.supportedCaps(s)
 
 	switch subCmd {
 	case irc.CapLS:
@@ -288,6 +319,7 @@ func (srv *Server) handleCAP(s *Session, msg *irc.Message) {
 			s.capVersion = version
 			s.caps[irc.CapCapNotify] = true
 		}
+		supported = srv.supportedCaps(s)
 
 		var parts []string
 		for k, v := range supported {
@@ -298,7 +330,7 @@ func (srv *Server) handleCAP(s *Session, msg *irc.Message) {
 			}
 		}
 		slices.Sort(parts)
-		srv.sendCAP(s, irc.CapLS, strings.Join(parts, " "))
+		srv.sendCAPList(s, irc.CapLS, parts)
 
 	case irc.CapLIST:
 		var enabled []string
@@ -308,7 +340,7 @@ func (srv *Server) handleCAP(s *Session, msg *irc.Message) {
 			}
 		}
 		slices.Sort(enabled)
-		srv.sendCAP(s, irc.CapLIST, strings.Join(enabled, " "))
+		srv.sendCAPList(s, irc.CapLIST, enabled)
 
 	case irc.CapREQ:
 		if s.state != StateRegistered {
@@ -317,7 +349,7 @@ func (srv *Server) handleCAP(s *Session, msg *irc.Message) {
 		req := strings.TrimPrefix(subArg, ":")
 		for _, cap := range strings.Fields(req) {
 			capName := strings.TrimPrefix(cap, "-")
-			if _, ok := supported[capName]; !ok {
+			if _, ok := supported[capName]; !ok || capName == irc.CapSTS {
 				srv.sendCAP(s, irc.CapNAK, req)
 				return
 			}
@@ -334,6 +366,9 @@ func (srv *Server) handleCAP(s *Session, msg *irc.Message) {
 		srv.sendCAP(s, irc.CapACK, req)
 
 	case irc.CapEND:
+		if s.saslActive {
+			srv.saslFailure(s, irc.ERR_SASLABORTED, "SASL authentication aborted")
+		}
 		if s.state == StateCapNeg {
 			s.state = StatePreReg
 		}
@@ -341,6 +376,189 @@ func (srv *Server) handleCAP(s *Session, msg *irc.Message) {
 
 	default:
 		s.SendNumeric(irc.ERR_INVALIDCAPCMD, subCmd, "Invalid CAP command")
+	}
+}
+
+const maxSASLPayload = 4096
+
+func (srv *Server) handleAuthenticate(s *Session, msg *irc.Message) {
+	if !s.capEnabled(irc.CapSASL) || len(msg.Params) == 0 {
+		srv.saslFailure(s, irc.ERR_SASLFAIL, "SASL authentication failed")
+		return
+	}
+	chunk := msg.Params[0]
+	if !s.saslActive {
+		if account, _ := s.identity(); account != "" {
+			s.SendNumeric(irc.ERR_SASLALREADY, "You have already authenticated using SASL")
+			return
+		}
+		if !strings.EqualFold(chunk, "PLAIN") {
+			s.SendNumeric(irc.RPL_SASLMECHS, "PLAIN", "are available SASL mechanisms")
+			srv.saslFailure(s, irc.ERR_SASLFAIL, "SASL authentication failed")
+			return
+		}
+		s.saslActive = true
+		s.saslBuffer = ""
+		s.Sendf(irc.AUTHENTICATE, "+")
+		return
+	}
+
+	if chunk == "*" {
+		srv.saslFailure(s, irc.ERR_SASLABORTED, "SASL authentication aborted")
+		return
+	}
+	if len(chunk) > 400 || len(s.saslBuffer)+len(chunk) > maxSASLPayload {
+		srv.saslFailure(s, irc.ERR_SASLTOOLONG, "SASL message too long")
+		return
+	}
+	if chunk != "+" {
+		s.saslBuffer += chunk
+	}
+	if len(chunk) == 400 {
+		return
+	}
+
+	encoded := s.saslBuffer
+	s.saslActive = false
+	s.saslBuffer = ""
+	payload, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil {
+		s.SendNumeric(irc.ERR_SASLFAIL, "SASL authentication failed")
+		return
+	}
+	defer clear(payload)
+	fields := strings.Split(string(payload), "\x00")
+	if len(fields) != 3 || fields[1] == "" || fields[2] == "" || fields[0] != "" && !strings.EqualFold(fields[0], fields[1]) {
+		s.SendNumeric(irc.ERR_SASLFAIL, "SASL authentication failed")
+		return
+	}
+	account, ok := srv.accounts[strings.ToLower(fields[1])]
+	hash := srv.dummyPasswordHash
+	if ok {
+		hash = account.PasswordHash
+	}
+	passwordOK := srv.checkPassword(s, hash, fields[2])
+	if !passwordOK || !ok {
+		s.SendNumeric(irc.ERR_SASLFAIL, "SASL authentication failed")
+		return
+	}
+
+	oldPrefix := s.Prefix()
+	s.identityMu.Lock()
+	s.account = account.Name
+	s.identityMu.Unlock()
+	if s.state == StateRegistered {
+		srv.notifyAccount(s, oldPrefix)
+	}
+	_, currentHost := s.identity()
+	if account.Host != "" && account.Host != currentHost {
+		oldHostPrefix := s.Prefix()
+		s.identityMu.Lock()
+		s.host = account.Host
+		s.identityMu.Unlock()
+		if s.state == StateRegistered {
+			srv.notifyHostChange(s, oldHostPrefix)
+		}
+	}
+	accountName, _ := s.identity()
+	s.SendNumeric(irc.RPL_LOGGEDIN, s.mask(), accountName, "You are now logged in as "+accountName)
+	s.SendNumeric(irc.RPL_SASLSUCCESS, "SASL authentication successful")
+}
+
+func (srv *Server) checkPassword(s *Session, hash, password string) bool {
+	if s.response == nil {
+		return checkBcrypt(hash, password)
+	}
+	response := s.suspendResponse()
+	srv.dispatchMu.Unlock()
+	ok := checkBcrypt(hash, password)
+	srv.dispatchMu.Lock()
+	s.resumeResponse(response)
+	return ok
+}
+
+func (srv *Server) saslFailure(s *Session, numeric irc.Numeric, text string) {
+	s.saslActive = false
+	s.saslBuffer = ""
+	s.SendNumeric(numeric, text)
+}
+
+func (srv *Server) notifyAccount(s *Session, prefix *irc.Prefix) {
+	account, _ := s.identity()
+	msg := &irc.Message{Prefix: prefix, Command: irc.ACCOUNT, Params: []string{account}}
+	notified := make(map[*Session]bool)
+	if s.capEnabled(irc.CapAccountNotify) {
+		notified[s] = true
+		s.Send(msg)
+	}
+	for _, ch := range srv.channels.All() {
+		if !ch.HasMember(s.nick) {
+			continue
+		}
+		for _, member := range ch.Members() {
+			peer := member.Session
+			if !notified[peer] && peer.capEnabled(irc.CapAccountNotify) {
+				notified[peer] = true
+				peer.Send(msg)
+			}
+		}
+	}
+	for _, peer := range srv.extendedMonitorPeers(s, irc.CapAccountNotify) {
+		if !notified[peer] {
+			notified[peer] = true
+			peer.Send(msg)
+		}
+	}
+}
+
+func (srv *Server) notifyHostChange(s *Session, oldPrefix *irc.Prefix) {
+	account, host := s.identity()
+	msg := &irc.Message{Prefix: oldPrefix, Command: irc.CHGHOST, Params: []string{s.user, host}}
+	notified := make(map[*Session]bool)
+	if s.capEnabled(irc.CapChghost) {
+		notified[s] = true
+		s.Send(msg)
+	}
+	shared := make(map[*Session][]*Channel)
+	for _, ch := range srv.channels.All() {
+		if !ch.HasMember(s.nick) {
+			continue
+		}
+		for _, member := range ch.Members() {
+			if member.Session != s {
+				shared[member.Session] = append(shared[member.Session], ch)
+			}
+		}
+	}
+	for peer, channels := range shared {
+		if peer.capEnabled(irc.CapChghost) {
+			if !notified[peer] {
+				notified[peer] = true
+				peer.Send(msg)
+			}
+			continue
+		}
+		peer.Send(&irc.Message{Prefix: oldPrefix, Command: irc.QUIT, Params: []string{"Changing hostname"}})
+		for _, ch := range channels {
+			join := &irc.Message{Prefix: s.Prefix(), Command: irc.JOIN, Params: []string{ch.name}}
+			if peer.capEnabled(irc.CapExtendedJoin) {
+				join.Params = append(join.Params, account, s.realname)
+			}
+			peer.Send(join)
+			if membership := ch.GetMembership(s.nick); membership != nil {
+				for i, prefix := range "~&@%+" {
+					if strings.ContainsRune(membership.Prefix, prefix) {
+						peer.Send(&irc.Message{Prefix: &irc.Prefix{Nick: srv.cfg.Name}, Command: irc.MODE, Params: []string{ch.name, "+" + string("qaohv"[i]), s.nick}})
+					}
+				}
+			}
+		}
+	}
+	for _, peer := range srv.extendedMonitorPeers(s, irc.CapChghost) {
+		if !notified[peer] {
+			notified[peer] = true
+			peer.Send(msg)
+		}
 	}
 }
 
@@ -354,6 +572,35 @@ func (srv *Server) sendCAP(s *Session, subCmd, value string) {
 		Command: irc.CAP,
 		Params:  []string{nick, subCmd, value},
 	})
+}
+
+func (srv *Server) sendCAPList(s *Session, subCmd string, caps []string) {
+	const maxPayload = 400
+	if len(caps) == 0 {
+		srv.sendCAP(s, subCmd, "")
+		return
+	}
+	for len(caps) > 0 {
+		end, size := 0, 0
+		for end < len(caps) && size+len(caps[end])+1 <= maxPayload {
+			size += len(caps[end]) + 1
+			end++
+		}
+		if end == 0 {
+			end = 1
+		}
+		value := strings.Join(caps[:end], " ")
+		if end < len(caps) {
+			nick := s.nick
+			if nick == "" {
+				nick = "*"
+			}
+			s.Send(&irc.Message{Prefix: &irc.Prefix{Nick: srv.cfg.Name}, Command: irc.CAP, Params: []string{nick, subCmd, "*", value}})
+		} else {
+			srv.sendCAP(s, subCmd, value)
+		}
+		caps = caps[end:]
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +624,9 @@ func (srv *Server) handlePrivmsg(s *Session, msg *irc.Message, notice bool) {
 	tags := irc.Tags{
 		"msgid": rand.Text(),
 		"time":  serverTime(now),
+	}
+	if account, _ := s.identity(); account != "" {
+		tags["account"] = account
 	}
 	if s.capEnabled(irc.CapMessageTags) {
 		for tag, value := range msg.Tags {
@@ -423,7 +673,11 @@ func (srv *Server) handlePrivmsg(s *Session, msg *irc.Message, notice bool) {
 		}
 		s.appendHistory(dest.nick, now, outMsg)
 		dest.appendHistory(s.nick, now, outMsg)
-		dest.Send(outMsg)
+		if dest == s {
+			s.sendImmediate(outMsg)
+		} else {
+			dest.Send(outMsg)
+		}
 		if s.capEnabled(irc.CapEchoMessage) {
 			s.Send(outMsg)
 		}
@@ -445,6 +699,9 @@ func (srv *Server) handleTagmsg(s *Session, msg *irc.Message) {
 	tags := irc.Tags{
 		"msgid": rand.Text(),
 		"time":  serverTime(time.Now()),
+	}
+	if account, _ := s.identity(); account != "" {
+		tags["account"] = account
 	}
 	for tag, value := range msg.Tags {
 		if strings.HasPrefix(tag, "+") {
@@ -484,7 +741,11 @@ func (srv *Server) handleTagmsg(s *Session, msg *irc.Message) {
 			s.SendNumeric(irc.ERR_NOSUCHNICK, target, "No such nick/channel")
 			return
 		}
-		dest.Send(outMsg)
+		if dest == s {
+			s.sendImmediate(outMsg)
+		} else {
+			dest.Send(outMsg)
+		}
 		if s.capEnabled(irc.CapEchoMessage) {
 			s.Send(outMsg)
 		}
@@ -725,10 +986,18 @@ func (srv *Server) handleJoin(s *Session, msg *irc.Message) {
 			Command: irc.JOIN,
 			Params:  []string{chanName},
 		}
-		if s.capEnabled(irc.CapExtendedJoin) {
-			joinMsg.Params = append(joinMsg.Params, s.account, s.realname)
+		for _, member := range ch.Members() {
+			out := joinMsg
+			if member.Session.capEnabled(irc.CapExtendedJoin) {
+				account, _ := s.identity()
+				if account == "" {
+					account = "*"
+				}
+				out = joinMsg.Clone()
+				out.Params = append(out.Params, account, s.realname)
+			}
+			member.Session.Send(out)
 		}
-		ch.Broadcast(joinMsg, nil)
 
 		// Topic
 		ch.mu.RLock()
@@ -744,7 +1013,9 @@ func (srv *Server) handleJoin(s *Session, msg *irc.Message) {
 			s.SendNumeric(irc.RPL_NOTOPIC, chanName, "No topic is set")
 		}
 
-		srv.sendNames(s, ch)
+		if !s.capEnabled(irc.CapNoImplicitNames) {
+			srv.sendNames(s, ch)
+		}
 	}
 }
 
@@ -858,6 +1129,17 @@ func (srv *Server) handleNames(s *Session, msg *irc.Message) {
 func (srv *Server) sendNames(s *Session, ch *Channel) {
 	multiPrefix := s.capEnabled(irc.CapMultiPrefix)
 	names := ch.NamesReply(multiPrefix)
+	if s.capEnabled(irc.CapUserHostInNames) {
+		members := ch.Members()
+		names = names[:0]
+		for _, member := range members {
+			prefix := member.Prefix
+			if !multiPrefix && len(prefix) > 1 {
+				prefix = prefix[:1]
+			}
+			names = append(names, prefix+member.Session.mask())
+		}
+	}
 
 	// Send in chunks of ~400 chars
 	const chunkMax = 400
@@ -1036,7 +1318,16 @@ func (srv *Server) handleChannelMode(s *Session, msg *irc.Message, chanName stri
 	}
 
 	changes := irc.ParseModeString(msg.Params[1], msg.Params[2:])
-	applied := ch.modes.Apply(changes, mode.ChannelValidator{})
+	var applied []irc.ModeChange
+	for _, change := range changes {
+		if strings.ContainsRune("qaohv", change.Mode) {
+			if ch.applyMembershipMode(change) {
+				applied = append(applied, change)
+			}
+		} else {
+			applied = append(applied, ch.modes.Apply([]irc.ModeChange{change}, mode.ChannelValidator{})...)
+		}
+	}
 	if len(applied) > 0 {
 		modeStr, args := irc.FormatModeChanges(applied)
 		params := append([]string{chanName, modeStr}, args...)
@@ -1095,7 +1386,8 @@ func (srv *Server) handleWho(s *Session, msg *irc.Message) {
 					flags = "G"
 				}
 				flags += m.Prefix
-				s.SendNumeric(irc.RPL_WHOREPLY, mask, u.user, u.host, srv.cfg.Name, u.nick, flags, "0 "+u.realname)
+				_, host := u.identity()
+				s.SendNumeric(irc.RPL_WHOREPLY, mask, u.user, host, srv.cfg.Name, u.nick, flags, "0 "+u.realname)
 			}
 		}
 	} else {
@@ -1105,7 +1397,8 @@ func (srv *Server) handleWho(s *Session, msg *irc.Message) {
 				if u.away != "" {
 					flags = "G"
 				}
-				s.SendNumeric(irc.RPL_WHOREPLY, mask, u.user, u.host, srv.cfg.Name, u.nick, flags, "0 "+u.realname)
+				_, host := u.identity()
+				s.SendNumeric(irc.RPL_WHOREPLY, mask, u.user, host, srv.cfg.Name, u.nick, flags, "0 "+u.realname)
 			}
 		}
 	}
@@ -1125,7 +1418,11 @@ func (srv *Server) handleWhois(s *Session, msg *irc.Message) {
 		return
 	}
 
-	s.SendNumeric(irc.RPL_WHOISUSER, target.nick, target.user, target.host, "*", target.realname)
+	account, host := target.identity()
+	s.SendNumeric(irc.RPL_WHOISUSER, target.nick, target.user, host, "*", target.realname)
+	if account != "" {
+		s.SendNumeric(irc.RPL_WHOISACCOUNT, target.nick, account, "is logged in as")
+	}
 	s.SendNumeric(irc.RPL_WHOISSERVER, target.nick, srv.cfg.Name, srv.cfg.Network)
 
 	// Channels
@@ -1191,21 +1488,26 @@ func (srv *Server) handleAway(s *Session, msg *irc.Message) {
 	}
 
 	// away-notify broadcast
+	notified := make(map[*Session]bool)
+	awayMsg := &irc.Message{Prefix: s.Prefix(), Command: irc.AWAY}
+	if s.away != "" {
+		awayMsg.Params = []string{s.away}
+	}
 	for _, ch := range srv.channels.All() {
 		if !ch.HasMember(s.nick) {
 			continue
 		}
-		awayMsg := &irc.Message{
-			Prefix:  s.Prefix(),
-			Command: irc.AWAY,
-		}
-		if s.away != "" {
-			awayMsg.Params = []string{s.away}
-		}
 		for _, m := range ch.Members() {
-			if m.Session != s && m.Session.capEnabled(irc.CapAwayNotify) {
+			if m.Session != s && !notified[m.Session] && m.Session.capEnabled(irc.CapAwayNotify) {
+				notified[m.Session] = true
 				m.Session.Send(awayMsg)
 			}
+		}
+	}
+	for _, peer := range srv.extendedMonitorPeers(s, irc.CapAwayNotify) {
+		if !notified[peer] {
+			notified[peer] = true
+			peer.Send(awayMsg)
 		}
 	}
 }
@@ -1225,7 +1527,8 @@ func (srv *Server) handleUserhost(s *Session, msg *irc.Message) {
 		if u.away != "" {
 			away = "-"
 		}
-		results = append(results, u.nick+oper+"="+away+u.user+"@"+u.host)
+		_, host := u.identity()
+		results = append(results, u.nick+oper+"="+away+u.user+"@"+host)
 	}
 	s.SendNumeric(irc.RPL_USERHOST, strings.Join(results, " "))
 }
@@ -1238,6 +1541,121 @@ func (srv *Server) handleIson(s *Session, msg *irc.Message) {
 		}
 	}
 	s.SendNumeric(irc.RPL_ISON, strings.Join(online, " "))
+}
+
+const monitorLimit = 100
+
+func (srv *Server) handleMonitor(s *Session, msg *irc.Message) {
+	if len(msg.Params) == 0 {
+		s.SendNumeric(irc.ERR_NEEDMOREPARAMS, irc.MONITOR, "Not enough parameters")
+		return
+	}
+	switch strings.ToUpper(msg.Params[0]) {
+	case "+":
+		if len(msg.Params) < 2 {
+			s.SendNumeric(irc.ERR_NEEDMOREPARAMS, irc.MONITOR, "Not enough parameters")
+			return
+		}
+		var online, offline, rejected []string
+		s.monitorMu.Lock()
+		for _, nick := range strings.Split(msg.Params[1], ",") {
+			if !isValidNick(nick) {
+				continue
+			}
+			key := strings.ToLower(nick)
+			if _, exists := s.monitor[key]; !exists {
+				if len(s.monitor) >= monitorLimit {
+					rejected = append(rejected, nick)
+					continue
+				}
+				s.monitor[key] = nick
+			}
+			if target, ok := srv.sessions.Get(nick); ok {
+				online = append(online, target.mask())
+			} else {
+				offline = append(offline, nick)
+			}
+		}
+		s.monitorMu.Unlock()
+		srv.sendMonitorList(s, irc.RPL_MONONLINE, online)
+		srv.sendMonitorList(s, irc.RPL_MONOFFLINE, offline)
+		if len(rejected) > 0 {
+			s.SendNumeric(irc.ERR_MONLISTFULL, strconv.Itoa(monitorLimit), strings.Join(rejected, ","), "Monitor list is full")
+		}
+	case "-":
+		if len(msg.Params) < 2 {
+			s.SendNumeric(irc.ERR_NEEDMOREPARAMS, irc.MONITOR, "Not enough parameters")
+			return
+		}
+		s.monitorMu.Lock()
+		for _, nick := range strings.Split(msg.Params[1], ",") {
+			delete(s.monitor, strings.ToLower(nick))
+		}
+		s.monitorMu.Unlock()
+	case "C":
+		s.monitorMu.Lock()
+		clear(s.monitor)
+		s.monitorMu.Unlock()
+	case "L":
+		list := s.monitorSnapshot()
+		slices.SortFunc(list, func(a, b string) int { return strings.Compare(strings.ToLower(a), strings.ToLower(b)) })
+		srv.sendMonitorList(s, irc.RPL_MONLIST, list)
+		s.SendNumeric(irc.RPL_ENDOFMONLIST, "End of MONITOR list")
+	case "S":
+		var online, offline []string
+		for _, nick := range s.monitorSnapshot() {
+			if target, ok := srv.sessions.Get(nick); ok {
+				online = append(online, target.mask())
+			} else {
+				offline = append(offline, nick)
+			}
+		}
+		srv.sendMonitorList(s, irc.RPL_MONONLINE, online)
+		srv.sendMonitorList(s, irc.RPL_MONOFFLINE, offline)
+	default:
+		s.SendNumeric(irc.ERR_NEEDMOREPARAMS, irc.MONITOR, "Invalid MONITOR subcommand")
+	}
+}
+
+func (srv *Server) sendMonitorList(s *Session, numeric irc.Numeric, values []string) {
+	for len(values) > 0 {
+		end, length := 0, 0
+		for end < len(values) && length+len(values[end])+1 <= 350 {
+			length += len(values[end]) + 1
+			end++
+		}
+		if end == 0 {
+			end = 1
+		}
+		s.SendNumeric(numeric, strings.Join(values[:end], ","))
+		values = values[end:]
+	}
+}
+
+func (srv *Server) notifyMonitorOnline(target *Session) {
+	for _, watcher := range srv.sessions.All() {
+		if watcher != target && watcher.isMonitoring(target.nick) {
+			srv.sendMonitorList(watcher, irc.RPL_MONONLINE, []string{target.mask()})
+		}
+	}
+}
+
+func (srv *Server) notifyMonitorOffline(nick string) {
+	for _, watcher := range srv.sessions.All() {
+		if watcher.isMonitoring(nick) {
+			srv.sendMonitorList(watcher, irc.RPL_MONOFFLINE, []string{nick})
+		}
+	}
+}
+
+func (srv *Server) extendedMonitorPeers(target *Session, capability string) []*Session {
+	var peers []*Session
+	for _, watcher := range srv.sessions.All() {
+		if watcher != target && watcher.capEnabled(irc.CapExtendedMonitor) && watcher.capEnabled(capability) && watcher.isMonitoring(target.nick) {
+			peers = append(peers, watcher)
+		}
+	}
+	return peers
 }
 
 // ---------------------------------------------------------------------------
@@ -1264,8 +1682,9 @@ func (srv *Server) handleQuit(s *Session, msg *irc.Message) {
 	s.Send(&irc.Message{
 		Prefix:  &irc.Prefix{Nick: srv.cfg.Name},
 		Command: irc.ERROR,
-		Params:  []string{"Closing Link: " + s.host + " (Quit: " + reason + ")"},
+		Params:  []string{"Closing Link: " + s.Prefix().Host + " (Quit: " + reason + ")"},
 	})
+	s.flush()
 	_ = s.conn.Close()
 }
 
@@ -1356,7 +1775,7 @@ func (srv *Server) handleOper(s *Session, msg *irc.Message) {
 	pass := msg.Params[1]
 
 	hash, ok := srv.cfg.Opers[name]
-	if !ok || !checkBcrypt(hash, pass) {
+	if !ok || !srv.checkPassword(s, hash, pass) {
 		s.SendNumeric(irc.ERR_PASSWDMISMATCH, "Password incorrect")
 		return
 	}
@@ -1391,6 +1810,7 @@ func (srv *Server) handleKill(s *Session, msg *irc.Message) {
 		Command: irc.ERROR,
 		Params:  []string{"Killed by " + s.nick + " (" + reason + ")"},
 	})
+	target.flush()
 	_ = target.conn.Close()
 }
 
@@ -1408,6 +1828,9 @@ func (srv *Server) handleSetname(s *Session, msg *irc.Message) {
 		Command: irc.SETNAME,
 		Params:  []string{s.realname},
 	}
+	if s.capEnabled(irc.CapSetname) {
+		s.Send(setMsg)
+	}
 	// Broadcast to shared channels
 	notified := map[string]bool{strings.ToLower(s.nick): true}
 	for _, ch := range srv.channels.All() {
@@ -1420,6 +1843,13 @@ func (srv *Server) handleSetname(s *Session, msg *irc.Message) {
 				notified[key] = true
 				m.Session.Send(setMsg)
 			}
+		}
+	}
+	for _, peer := range srv.extendedMonitorPeers(s, irc.CapSetname) {
+		key := strings.ToLower(peer.nick)
+		if !notified[key] {
+			notified[key] = true
+			peer.Send(setMsg)
 		}
 	}
 }
