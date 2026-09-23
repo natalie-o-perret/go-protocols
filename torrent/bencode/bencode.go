@@ -21,6 +21,8 @@ import (
 	"strings"
 )
 
+const maxNestingDepth = 64
+
 // Decode reads a bencoded value from r and returns it as one of:
 // int64, string, []any, or map[string]any.
 func Decode(r io.Reader) (any, error) {
@@ -28,10 +30,13 @@ func Decode(r io.Reader) (any, error) {
 	if !ok {
 		br = bufio.NewReader(r)
 	}
-	return decode(br)
+	return decode(br, 0)
 }
 
-func decode(r *bufio.Reader) (any, error) {
+func decode(r *bufio.Reader, depth int) (any, error) {
+	if depth > maxNestingDepth {
+		return nil, fmt.Errorf("bencode: nesting exceeds %d levels", maxNestingDepth)
+	}
 	b, err := r.ReadByte()
 	if err != nil {
 		return nil, err
@@ -40,9 +45,9 @@ func decode(r *bufio.Reader) (any, error) {
 	case b == 'i':
 		return decodeInt(r)
 	case b == 'l':
-		return decodeList(r)
+		return decodeList(r, depth)
 	case b == 'd':
-		return decodeDict(r)
+		return decodeDict(r, depth)
 	case b >= '0' && b <= '9':
 		_ = r.UnreadByte()
 		return decodeString(r)
@@ -61,6 +66,12 @@ func decodeInt(r *bufio.Reader) (int64, error) {
 	if s == "-0" {
 		return 0, errors.New("bencode: negative zero is invalid")
 	}
+	if s != "" && s[0] == '+' {
+		return 0, fmt.Errorf("bencode: integer %q has a leading plus sign", s)
+	}
+	if (len(s) > 1 && s[0] == '0') || (len(s) > 2 && s[0] == '-' && s[1] == '0') {
+		return 0, fmt.Errorf("bencode: integer %q has a leading zero", s)
+	}
 	n, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("bencode: invalid integer %q: %w", s, err)
@@ -75,19 +86,22 @@ func decodeString(r *bufio.Reader) (string, error) {
 		return "", fmt.Errorf("bencode: read string length: %w", err)
 	}
 	lenStr = lenStr[:len(lenStr)-1] // trim ':'
+	if len(lenStr) > 1 && lenStr[0] == '0' {
+		return "", fmt.Errorf("bencode: string length %q has a leading zero", lenStr)
+	}
 	n, err := strconv.Atoi(lenStr)
 	if err != nil {
 		return "", fmt.Errorf("bencode: invalid string length %q: %w", lenStr, err)
 	}
-	buf := make([]byte, n)
-	if _, err = io.ReadFull(r, buf); err != nil {
+	var value strings.Builder
+	if _, err = io.CopyN(&value, r, int64(n)); err != nil {
 		return "", fmt.Errorf("bencode: read string data: %w", err)
 	}
-	return string(buf), nil
+	return value.String(), nil
 }
 
 // decodeList parses a list after the leading 'l' has been consumed.
-func decodeList(r *bufio.Reader) ([]any, error) {
+func decodeList(r *bufio.Reader, depth int) ([]any, error) {
 	var list []any
 	for {
 		b, err := r.ReadByte()
@@ -98,7 +112,7 @@ func decodeList(r *bufio.Reader) ([]any, error) {
 			return list, nil
 		}
 		_ = r.UnreadByte()
-		val, err := decode(r)
+		val, err := decode(r, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -107,8 +121,10 @@ func decodeList(r *bufio.Reader) ([]any, error) {
 }
 
 // decodeDict parses a dictionary after the leading 'd' has been consumed.
-func decodeDict(r *bufio.Reader) (map[string]any, error) {
+func decodeDict(r *bufio.Reader, depth int) (map[string]any, error) {
 	m := make(map[string]any)
+	var previous string
+	first := true
 	for {
 		b, err := r.ReadByte()
 		if err != nil {
@@ -122,7 +138,11 @@ func decodeDict(r *bufio.Reader) (map[string]any, error) {
 		if err != nil {
 			return nil, fmt.Errorf("bencode: dict key: %w", err)
 		}
-		val, err := decode(r)
+		if !first && key <= previous {
+			return nil, fmt.Errorf("bencode: dictionary keys are not strictly increasing")
+		}
+		previous, first = key, false
+		val, err := decode(r, depth+1)
 		if err != nil {
 			return nil, fmt.Errorf("bencode: dict value for %q: %w", key, err)
 		}

@@ -1,6 +1,8 @@
 package tracker_test
 
 import (
+	"bytes"
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -78,7 +80,7 @@ func TestAnnounceDictionaryPeers(t *testing.T) {
 		"interval": int64(900),
 		"peers": []any{
 			map[string]any{"ip": "192.168.1.1", "port": int64(6881)},
-			map[string]any{"ip": "10.0.0.1", "port": int64(6882)},
+			map[string]any{"ip": "peer.example.com", "port": int64(6882)},
 		},
 	}
 	srv := testResponse(t, resp)
@@ -93,6 +95,26 @@ func TestAnnounceDictionaryPeers(t *testing.T) {
 	}
 	if ar.Peers[0].Port != 6881 {
 		t.Errorf("Peers[0].Port = %d, want 6881", ar.Peers[0].Port)
+	}
+	if ar.Peers[1].String() != "peer.example.com:6882" {
+		t.Errorf("Peers[1] = %q, want peer.example.com:6882", ar.Peers[1].String())
+	}
+}
+
+func TestAnnounceCapsPeers(t *testing.T) {
+	peers := make([]any, 51)
+	for i := range peers {
+		peers[i] = map[string]any{"ip": "127.0.0.1", "port": int64(6000 + i)}
+	}
+	srv := testResponse(t, map[string]any{"interval": int64(900), "peers": peers})
+	defer srv.Close()
+
+	response, err := tracker.Announce(srv.URL, tracker.AnnounceRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Peers) != 50 {
+		t.Fatalf("got %d peers, want 50", len(response.Peers))
 	}
 }
 
@@ -113,6 +135,37 @@ func TestAnnounceInvalidURL(t *testing.T) {
 	_, err := tracker.Announce("://invalid", tracker.AnnounceRequest{})
 	if err == nil {
 		t.Error("want error for invalid URL, got nil")
+	}
+}
+
+func TestAnnounceHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	if _, err := tracker.Announce(srv.URL, tracker.AnnounceRequest{}); err == nil {
+		t.Fatal("Announce accepted HTTP error response")
+	}
+}
+
+func TestAnnounceRejectsOversizedResponse(t *testing.T) {
+	body := bytes.Repeat([]byte{'x'}, (4<<20)+1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	if _, err := tracker.Announce(srv.URL, tracker.AnnounceRequest{}); err == nil {
+		t.Fatal("Announce accepted oversized response")
+	}
+}
+
+func TestAnnounceContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := tracker.AnnounceContext(ctx, "http://tracker.invalid", tracker.AnnounceRequest{}); err == nil {
+		t.Fatal("AnnounceContext ignored cancellation")
 	}
 }
 

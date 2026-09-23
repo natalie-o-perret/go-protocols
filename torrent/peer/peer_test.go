@@ -123,6 +123,20 @@ func TestReadMessageKeepalive(t *testing.T) {
 	}
 }
 
+func TestReadMessageRejectsOversizedPayload(t *testing.T) {
+	var buf bytes.Buffer
+	_ = binary.Write(&buf, binary.BigEndian, uint32(peer.MaxMessageSize+1))
+	if _, err := peer.ReadMessage(&buf); err == nil {
+		t.Fatal("ReadMessage accepted oversized payload")
+	}
+}
+
+func TestWriteMessageRejectsNil(t *testing.T) {
+	if err := peer.WriteMessage(&bytes.Buffer{}, nil); err == nil {
+		t.Fatal("WriteMessage accepted nil message")
+	}
+}
+
 func TestFormatRequest(t *testing.T) {
 	payload := peer.FormatRequest(5, 16384, 16384)
 	if len(payload) != 12 {

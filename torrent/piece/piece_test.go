@@ -95,6 +95,37 @@ func TestStoreOverflow(t *testing.T) {
 	}
 }
 
+func TestStoreDuplicateDoesNotCompletePiece(t *testing.T) {
+	data := make([]byte, piece.BlockSize*2)
+	s := piece.New(0, makeHash(data), len(data))
+	if err := s.Store(0, data[:piece.BlockSize]); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store(0, data[:piece.BlockSize]); err != nil {
+		t.Fatal(err)
+	}
+	if s.Complete() {
+		t.Fatal("duplicate block completed the piece")
+	}
+}
+
+func TestResetRequests(t *testing.T) {
+	s := piece.New(0, metainfo.Hash{}, piece.BlockSize*2)
+	begin, _, ok := s.NextRequest()
+	if !ok || begin != 0 {
+		t.Fatalf("first request = %d, %v", begin, ok)
+	}
+	begin, _, ok = s.NextRequest()
+	if !ok || begin != piece.BlockSize {
+		t.Fatalf("second request = %d, %v", begin, ok)
+	}
+	s.ResetRequests()
+	begin, _, ok = s.NextRequest()
+	if !ok || begin != 0 {
+		t.Fatalf("request after reset = %d, %v", begin, ok)
+	}
+}
+
 func TestVerify(t *testing.T) {
 	data := []byte("some piece data here, four score and seven bytes ago")
 	hash := makeHash(data)

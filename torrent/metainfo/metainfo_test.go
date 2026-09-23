@@ -3,6 +3,7 @@ package metainfo_test
 import (
 	"bytes"
 	"crypto/sha1"
+	"math"
 	"strings"
 	"testing"
 
@@ -202,6 +203,129 @@ func TestDecodeInvalidPiecesLength(t *testing.T) {
 	_, err := metainfo.Decode(bytes.NewReader(data))
 	if err == nil {
 		t.Error("want error for pieces length not multiple of 20, got nil")
+	}
+}
+
+func TestDecodeRequiresNameAndFileMode(t *testing.T) {
+	for _, info := range []map[string]any{
+		{
+			"length":       int64(0),
+			"piece length": int64(16384),
+			"pieces":       "",
+		},
+		{
+			"name":         "empty",
+			"piece length": int64(16384),
+			"pieces":       "",
+		},
+		{
+			"files":        []any{},
+			"length":       int64(0),
+			"name":         "empty",
+			"piece length": int64(16384),
+			"pieces":       "",
+		},
+		{
+			"files":        []any{},
+			"name":         "empty",
+			"piece length": int64(16384),
+			"pieces":       "",
+		},
+	} {
+		if _, err := metainfo.Decode(bytes.NewReader(buildTorrent(t, "", info))); err == nil {
+			t.Fatalf("Decode accepted invalid info dictionary: %#v", info)
+		}
+	}
+}
+
+func TestDecodeValidatesPieceCount(t *testing.T) {
+	info := map[string]any{
+		"length":       int64(2),
+		"name":         "file",
+		"piece length": int64(1),
+		"pieces":       zeroHashes(1),
+	}
+	if _, err := metainfo.Decode(bytes.NewReader(buildTorrent(t, "", info))); err == nil {
+		t.Fatal("Decode accepted the wrong number of piece hashes")
+	}
+}
+
+func TestDecodeRejectsInvalidFilePath(t *testing.T) {
+	info := map[string]any{
+		"files": []any{map[string]any{
+			"length": int64(0),
+			"path":   []any{},
+		}},
+		"name":         "files",
+		"piece length": int64(16384),
+		"pieces":       "",
+	}
+	if _, err := metainfo.Decode(bytes.NewReader(buildTorrent(t, "", info))); err == nil {
+		t.Fatal("Decode accepted an empty file path")
+	}
+}
+
+func TestInfoValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		info    metainfo.Info
+		wantErr bool
+	}{
+		{name: "single file", info: metainfo.Info{PieceLength: 1, Length: 1, Pieces: []metainfo.Hash{{}}}},
+		{name: "multi file", info: metainfo.Info{
+			PieceLength: 1,
+			Files:       []metainfo.FileInfo{{Path: []string{"file"}, Length: 1}},
+			Pieces:      []metainfo.Hash{{}},
+		}},
+		{name: "invalid piece length", info: metainfo.Info{}, wantErr: true},
+		{name: "negative length", info: metainfo.Info{PieceLength: 1, Length: -1}, wantErr: true},
+		{name: "both file modes", info: metainfo.Info{
+			PieceLength: 1,
+			Length:      1,
+			Files:       []metainfo.FileInfo{{Path: []string{"file"}, Length: 1}},
+		}, wantErr: true},
+		{name: "negative multi-file length", info: metainfo.Info{
+			PieceLength: 1,
+			Files:       []metainfo.FileInfo{{Path: []string{"file"}, Length: -1}},
+		}, wantErr: true},
+		{name: "overflowing total length", info: metainfo.Info{
+			PieceLength: 1,
+			Files: []metainfo.FileInfo{
+				{Path: []string{"one"}, Length: math.MaxInt64},
+				{Path: []string{"two"}, Length: 1},
+			},
+		}, wantErr: true},
+		{name: "empty path", info: metainfo.Info{
+			PieceLength: 1,
+			Files:       []metainfo.FileInfo{{Length: 1}},
+		}, wantErr: true},
+		{name: "wrong piece count", info: metainfo.Info{PieceLength: 1, Length: 1}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.info.Validate()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestDecodeRejectsInvalidFileEntries(t *testing.T) {
+	for _, file := range []any{
+		"not a dictionary",
+		map[string]any{"length": "zero", "path": []any{"file"}},
+		map[string]any{"length": int64(0), "path": []any{int64(1)}},
+	} {
+		info := map[string]any{
+			"files":        []any{file},
+			"name":         "files",
+			"piece length": int64(16384),
+			"pieces":       "",
+		}
+		if _, err := metainfo.Decode(bytes.NewReader(buildTorrent(t, "", info))); err == nil {
+			t.Fatalf("Decode accepted invalid file entry: %#v", file)
+		}
 	}
 }
 
