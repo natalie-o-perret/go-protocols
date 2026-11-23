@@ -34,21 +34,21 @@ jobs:
       matrix:
         include:
           - module: ftp
-            go-versions: '["1.24","1.26.7"]'
+            go-versions: '["1.24","1.26","stable"]'
             coverage: 0
           - module: irc
-            go-versions: '["1.26.7"]'
+            go-versions: '["1.26","stable"]'
             coverage: 35
           - module: sftp
-            go-versions: '["1.26.0","1.26.7"]'
+            go-versions: '["1.26","stable"]'
             coverage: 0
           - module: torrent
-            go-versions: '["1.26.3","1.26.7"]'
+            go-versions: '["1.26","stable"]'
             coverage: 80
     uses: natalie-o-perret/.github/.github/workflows/reusable-build-test-go.yml@main
     with:
       go-versions: ${{ matrix.go-versions }}
-      go-version-latest: "1.26.7"
+      go-version-latest: stable
       coverage-threshold: ${{ matrix.coverage }}
       working-directory: ${{ matrix.module }}
       coverage-artifact-name: coverage-${{ matrix.module }}
